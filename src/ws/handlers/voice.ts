@@ -105,6 +105,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
                   user_id: prod.userId,
                   kind: consumer.kind,
                   rtpParameters: consumer.rtpParameters,
+                  source: prod.source,
                 },
               }));
             }
@@ -148,10 +149,11 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       const transportId = data['transport_id'] as string;
       const kind = data['kind'] as 'audio' | 'video';
       const rtpParameters = data['rtp_parameters'] as unknown;
+      const source = data['source'] as string | undefined;
 
       if (transportId && kind && rtpParameters) {
         try {
-          const producer = await voiceManager.createProducer(transportId, kind, rtpParameters);
+          const producer = await voiceManager.createProducer(transportId, kind, rtpParameters, source);
           session.ws.send(JSON.stringify({
             event: 'voice.produced',
             data: { producer_id: producer.id },
@@ -178,6 +180,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
                     user_id: session.userId,
                     kind: consumer.kind,
                     rtpParameters: consumer.rtpParameters,
+                    source: source ?? (kind === 'audio' ? 'mic' : 'camera'),
                   });
                 }
               } catch {

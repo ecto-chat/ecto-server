@@ -12,14 +12,14 @@ const MEDIA_CODECS: mediasoupTypes.RouterRtpCodecCapability[] = [
   },
   {
     kind: 'video',
-    mimeType: 'video/VP8',
-    clockRate: 90000,
-  },
-  {
-    kind: 'video',
     mimeType: 'video/VP9',
     clockRate: 90000,
     parameters: { 'profile-id': 2 },
+  },
+  {
+    kind: 'video',
+    mimeType: 'video/VP8',
+    clockRate: 90000,
   },
   {
     kind: 'video',
@@ -42,6 +42,7 @@ interface ProducerInfo {
   producerId: string;
   userId: string;
   kind: mediasoupTypes.MediaKind;
+  source: string;
 }
 
 class VoiceManager {
@@ -60,8 +61,8 @@ class VoiceManager {
   private transportMeta = new Map<string, { channelId: string; userId: string }>();
   // producerId → Producer
   private producerById = new Map<string, mediasoupTypes.Producer>();
-  // producerId → { channelId, userId }
-  private producerMeta = new Map<string, { channelId: string; userId: string }>();
+  // producerId → { channelId, userId, source }
+  private producerMeta = new Map<string, { channelId: string; userId: string; source: string }>();
   // consumerId → Consumer
   private consumerById = new Map<string, mediasoupTypes.Consumer>();
   // `${channelId}:${userId}` → Consumer[] (consumers this user has)
@@ -141,7 +142,7 @@ class VoiceManager {
       enableUdp: true,
       enableTcp: true,
       preferUdp: true,
-      initialAvailableOutgoingBitrate: 1_000_000,
+      initialAvailableOutgoingBitrate: 20_000_000,
     };
 
     const sendTransport = await router.createWebRtcTransport(transportOptions);
@@ -177,6 +178,7 @@ class VoiceManager {
     transportId: string,
     kind: mediasoupTypes.MediaKind,
     rtpParameters: unknown,
+    source?: string,
   ): Promise<mediasoupTypes.Producer> {
     const transport = this.transportById.get(transportId);
     if (!transport || transport.closed) throw new Error('Transport not found or closed');
@@ -184,13 +186,15 @@ class VoiceManager {
     const meta = this.transportMeta.get(transportId);
     if (!meta) throw new Error('Transport metadata not found');
 
+    const resolvedSource = source ?? (kind === 'audio' ? 'mic' : 'camera');
+
     const producer = await transport.produce({
       kind,
       rtpParameters: rtpParameters as mediasoupTypes.RtpParameters,
     });
 
     this.producerById.set(producer.id, producer);
-    this.producerMeta.set(producer.id, { channelId: meta.channelId, userId: meta.userId });
+    this.producerMeta.set(producer.id, { channelId: meta.channelId, userId: meta.userId, source: resolvedSource });
 
     producer.on('transportclose', () => {
       this.producerById.delete(producer.id);
@@ -281,6 +285,7 @@ class VoiceManager {
           producerId,
           userId: meta.userId,
           kind: producer.kind,
+          source: meta.source,
         });
       }
     }
