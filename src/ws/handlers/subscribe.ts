@@ -1,7 +1,2 @@
-export function handleChannelSubscribe() {
-  // TODO
-}
-
-export function handleChannelUnsubscribe() {
-  // TODO
-}
+// Subscribe/unsubscribe handlers are inlined in main-ws.ts
+export {};

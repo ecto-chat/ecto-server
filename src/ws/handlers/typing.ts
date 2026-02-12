@@ -1,7 +1,2 @@
-export function handleTypingStart() {
-  // TODO
-}
-
-export function handleTypingStop() {
-  // TODO
-}
+// Typing handlers are inlined in main-ws.ts
+export {};

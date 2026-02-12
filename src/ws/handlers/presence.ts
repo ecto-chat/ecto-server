@@ -1,3 +1,2 @@
-export function handlePresenceUpdate() {
-  // TODO
-}
+// Presence handlers are inlined in main-ws.ts
+export {};

@@ -1,19 +1,122 @@
-import { router, protectedProcedure } from '../router.js';
+import { z } from 'zod/v4';
+import { router, protectedProcedure } from '../init.js';
+import { categories, channels } from '../../db/schema/index.js';
+import { eq, and, max } from 'drizzle-orm';
+import { generateUUIDv7, Permissions } from 'ecto-shared';
+import { formatCategory } from '../../utils/format.js';
+import { requirePermission } from '../../utils/permission-context.js';
+import { insertAuditLog } from '../../utils/audit-log.js';
+import { ectoError } from '../../utils/errors.js';
 
 export const categoriesRouter = router({
-  list: protectedProcedure.query(async () => {
-    // TODO
-  }),
-  create: protectedProcedure.mutation(async () => {
-    // TODO
-  }),
-  update: protectedProcedure.mutation(async () => {
-    // TODO
-  }),
-  delete: protectedProcedure.mutation(async () => {
-    // TODO
-  }),
-  reorder: protectedProcedure.mutation(async () => {
-    // TODO
-  }),
+  create: protectedProcedure
+    .input(z.object({ name: z.string().min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_CHANNELS);
+      const d = ctx.db;
+
+      const [maxPos] = await d
+        .select({ maxPosition: max(categories.position) })
+        .from(categories)
+        .where(eq(categories.serverId, ctx.serverId));
+      const position = (maxPos?.maxPosition ?? -1) + 1;
+
+      const id = generateUUIDv7();
+      await d.insert(categories).values({
+        id,
+        serverId: ctx.serverId,
+        name: input.name,
+        position,
+      });
+
+      await insertAuditLog(d, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'category.create',
+        targetType: 'category',
+        targetId: id,
+        details: { name: input.name },
+      });
+
+      const [row] = await d.select().from(categories).where(eq(categories.id, id)).limit(1);
+      return formatCategory(row!);
+    }),
+
+  update: protectedProcedure
+    .input(z.object({ category_id: z.string().uuid(), name: z.string().min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_CHANNELS);
+
+      const [cat] = await ctx.db
+        .select()
+        .from(categories)
+        .where(and(eq(categories.id, input.category_id), eq(categories.serverId, ctx.serverId)))
+        .limit(1);
+
+      if (!cat) throw ectoError('NOT_FOUND', 3000, 'Category not found');
+
+      await ctx.db
+        .update(categories)
+        .set({ name: input.name })
+        .where(eq(categories.id, input.category_id));
+
+      await insertAuditLog(ctx.db, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'category.update',
+        targetType: 'category',
+        targetId: input.category_id,
+        details: { name: input.name },
+      });
+
+      const [updated] = await ctx.db.select().from(categories).where(eq(categories.id, input.category_id)).limit(1);
+      return formatCategory(updated!);
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({ category_id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_CHANNELS);
+
+      const [cat] = await ctx.db
+        .select()
+        .from(categories)
+        .where(and(eq(categories.id, input.category_id), eq(categories.serverId, ctx.serverId)))
+        .limit(1);
+
+      if (!cat) throw ectoError('NOT_FOUND', 3000, 'Category not found');
+
+      // Channels become uncategorized (handled by ON DELETE SET NULL FK)
+      await ctx.db.delete(categories).where(eq(categories.id, input.category_id));
+
+      await insertAuditLog(ctx.db, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'category.delete',
+        targetType: 'category',
+        targetId: input.category_id,
+        details: { name: cat.name },
+      });
+
+      return { success: true };
+    }),
+
+  reorder: protectedProcedure
+    .input(
+      z.object({
+        categories: z.array(z.object({ category_id: z.string().uuid(), position: z.number().int().min(0) })),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_CHANNELS);
+
+      for (const item of input.categories) {
+        await ctx.db
+          .update(categories)
+          .set({ position: item.position })
+          .where(and(eq(categories.id, item.category_id), eq(categories.serverId, ctx.serverId)));
+      }
+
+      return { success: true };
+    }),
 });

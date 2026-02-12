@@ -9,6 +9,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   MEDIASOUP_MIN_PORT: z.coerce.number().default(40000),
   MEDIASOUP_MAX_PORT: z.coerce.number().default(40100),
+  UPLOAD_DIR: z.string().default('./data/uploads'),
+  SERVER_ADDRESS: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;

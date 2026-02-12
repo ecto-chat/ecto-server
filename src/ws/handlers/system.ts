@@ -1,11 +1,3 @@
-export function handleIdentify() {
-  // TODO
-}
-
-export function handleHeartbeat() {
-  // TODO
-}
-
-export function handleResume() {
-  // TODO
-}
+// System handlers are inlined in main-ws.ts
+// This file exists for structural compatibility
+export {};
