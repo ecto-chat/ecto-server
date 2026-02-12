@@ -1,0 +1,15 @@
+services:
+  server:
+    build: .
+    ports:
+      - "3000:3000"
+      - "3478:3478/udp"
+      - "40000-40100:40000-40100/udp"
+    environment:
+      DATABASE_TYPE: sqlite
+      DATABASE_PATH: /data/ecto.db
+      JWT_SECRET: change-me
+    volumes:
+      - sqlitedata:/data
+volumes:
+  sqlitedata:

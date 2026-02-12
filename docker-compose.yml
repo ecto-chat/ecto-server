@@ -1,0 +1,29 @@
+services:
+  server:
+    build: .
+    ports:
+      - "3000:3000"
+      - "3478:3478/udp"
+      - "40000-40100:40000-40100/udp"
+    environment:
+      DATABASE_URL: postgres://ecto:ecto@db:5432/ecto
+      DATABASE_TYPE: pg
+      JWT_SECRET: change-me
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ecto
+      POSTGRES_PASSWORD: ecto
+      POSTGRES_DB: ecto
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecto"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+volumes:
+  pgdata:
