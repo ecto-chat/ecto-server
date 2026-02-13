@@ -14,7 +14,7 @@ const MEDIA_CODECS: mediasoupTypes.RouterRtpCodecCapability[] = [
     kind: 'video',
     mimeType: 'video/VP9',
     clockRate: 90000,
-    parameters: { 'profile-id': 2 },
+    parameters: { 'profile-id': 0 },
   },
   {
     kind: 'video',
@@ -67,6 +67,8 @@ class VoiceManager {
   private consumerById = new Map<string, mediasoupTypes.Consumer>();
   // `${channelId}:${userId}` → Consumer[] (consumers this user has)
   private userConsumers = new Map<string, mediasoupTypes.Consumer[]>();
+  // userId → device RTP capabilities (set via voice.capabilities)
+  private deviceCapabilities = new Map<string, mediasoupTypes.RtpCapabilities>();
 
   async initialize(): Promise<void> {
     const numWorkers = Math.max(1, Math.floor(os.cpus().length / 2));
@@ -115,6 +117,14 @@ class VoiceManager {
 
   getRouter(channelId: string): mediasoupTypes.Router | undefined {
     return this.routers.get(channelId);
+  }
+
+  setDeviceCapabilities(userId: string, rtpCapabilities: mediasoupTypes.RtpCapabilities): void {
+    this.deviceCapabilities.set(userId, rtpCapabilities);
+  }
+
+  getDeviceCapabilities(userId: string): mediasoupTypes.RtpCapabilities | undefined {
+    return this.deviceCapabilities.get(userId);
   }
 
   async createTransports(channelId: string, userId: string): Promise<UserTransports> {
@@ -171,7 +181,13 @@ class VoiceManager {
   async connectTransport(transportId: string, dtlsParameters: unknown): Promise<void> {
     const transport = this.transportById.get(transportId);
     if (!transport || transport.closed) return;
-    await transport.connect({ dtlsParameters: dtlsParameters as mediasoupTypes.DtlsParameters });
+    try {
+      await transport.connect({ dtlsParameters: dtlsParameters as mediasoupTypes.DtlsParameters });
+    } catch (err) {
+      // Ignore "already called" — client may retry connect after network glitch
+      if (err instanceof Error && err.message.includes('already called')) return;
+      throw err;
+    }
   }
 
   async createProducer(
@@ -262,6 +278,20 @@ class VoiceManager {
     const consumer = this.consumerById.get(consumerId);
     if (consumer && !consumer.closed) {
       await consumer.resume();
+      // For video consumers, periodically request keyframes until the producer's
+      // transport is connected and frames are flowing. A single delayed request
+      // can miss if the sender's ICE/DTLS handshake hasn't completed yet.
+      if (consumer.kind === 'video') {
+        let attempts = 0;
+        const interval = setInterval(() => {
+          attempts++;
+          if (consumer.closed || attempts > 10) {
+            clearInterval(interval);
+            return;
+          }
+          consumer.requestKeyFrame();
+        }, 1000);
+      }
     }
   }
 
@@ -360,6 +390,7 @@ class VoiceManager {
       this.transportMeta.delete(userTransports.recv.id);
 
       this.transports.delete(key);
+      this.deviceCapabilities.delete(userId);
 
       // Remove user from channel
       const users = this.channelUsers.get(channelId);
@@ -392,6 +423,7 @@ class VoiceManager {
     this.producerMeta.clear();
     this.consumerById.clear();
     this.userConsumers.clear();
+    this.deviceCapabilities.clear();
   }
 }
 

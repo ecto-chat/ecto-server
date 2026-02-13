@@ -86,33 +86,8 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
           },
         }));
 
-        // Create consumers for existing producers in channel
-        const existingProducers = voiceManager.getProducersInChannel(channelId, session.userId);
-        for (const prod of existingProducers) {
-          try {
-            const consumer = await voiceManager.createConsumer(
-              channelId,
-              session.userId,
-              prod.producerId,
-              router.rtpCapabilities,
-            );
-            if (consumer) {
-              session.ws.send(JSON.stringify({
-                event: 'voice.new_consumer',
-                data: {
-                  consumer_id: consumer.id,
-                  producer_id: prod.producerId,
-                  user_id: prod.userId,
-                  kind: consumer.kind,
-                  rtpParameters: consumer.rtpParameters,
-                  source: prod.source,
-                },
-              }));
-            }
-          } catch {
-            // Consumer creation can fail if capabilities don't match
-          }
-        }
+        // Consumers for existing producers are created after the client sends
+        // voice.capabilities with its device rtpCapabilities
       } catch (err) {
         session.ws.send(JSON.stringify({ event: 'voice.error', data: { code: 8002, message: 'Voice server unavailable' } }));
         voiceStateManager.leave(session.userId);
@@ -145,6 +120,48 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       break;
     }
 
+    case 'voice.capabilities': {
+      const rtpCapabilities = data['rtp_capabilities'] as unknown;
+      if (!rtpCapabilities) break;
+
+      voiceManager.setDeviceCapabilities(
+        session.userId,
+        rtpCapabilities as import('mediasoup').types.RtpCapabilities,
+      );
+
+      // Now create consumers for existing producers using the client's real capabilities
+      const voiceState = voiceStateManager.getByUser(session.userId);
+      if (voiceState) {
+        const existingProducers = voiceManager.getProducersInChannel(voiceState.channelId, session.userId);
+        for (const prod of existingProducers) {
+          try {
+            const consumer = await voiceManager.createConsumer(
+              voiceState.channelId,
+              session.userId,
+              prod.producerId,
+              rtpCapabilities as import('mediasoup').types.RtpCapabilities,
+            );
+            if (consumer) {
+              session.ws.send(JSON.stringify({
+                event: 'voice.new_consumer',
+                data: {
+                  consumer_id: consumer.id,
+                  producer_id: prod.producerId,
+                  user_id: prod.userId,
+                  kind: consumer.kind,
+                  rtpParameters: consumer.rtpParameters,
+                  source: prod.source,
+                },
+              }));
+            }
+          } catch {
+            // Consumer creation can fail if capabilities don't match
+          }
+        }
+      }
+      break;
+    }
+
     case 'voice.produce': {
       const transportId = data['transport_id'] as string;
       const kind = data['kind'] as 'audio' | 'video';
@@ -159,19 +176,20 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
             data: { producer_id: producer.id },
           }));
 
-          // Notify other users in channel
+          // Notify other users in channel — use their device capabilities
           const state = voiceStateManager.getByUser(session.userId);
           if (state) {
             const channelUsers = voiceStateManager.getByChannel(state.channelId);
-            const router = voiceManager.getRouter(state.channelId);
             for (const other of channelUsers) {
               if (other.userId === session.userId) continue;
+              const otherCaps = voiceManager.getDeviceCapabilities(other.userId);
+              if (!otherCaps) continue; // Client hasn't sent capabilities yet
               try {
                 const consumer = await voiceManager.createConsumer(
                   state.channelId,
                   other.userId,
                   producer.id,
-                  router?.rtpCapabilities ?? {} as any,
+                  otherCaps,
                 );
                 if (consumer) {
                   eventDispatcher.dispatchToUser(other.userId, 'voice.new_consumer', {
