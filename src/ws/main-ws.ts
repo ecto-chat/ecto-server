@@ -238,6 +238,17 @@ export function setupMainWebSocket(): WebSocketServer {
           break;
         }
 
+        case 'typing.stop': {
+          const typingData = msg.data as { channel_id: string };
+          if (typingData?.channel_id) {
+            eventDispatcher.dispatchToChannel(typingData.channel_id, 'typing.stop', {
+              channel_id: typingData.channel_id,
+              user_id: session.userId,
+            });
+          }
+          break;
+        }
+
         case 'presence.update': {
           const presData = msg.data as { status: string; custom_text?: string | null };
           if (presData?.status) {

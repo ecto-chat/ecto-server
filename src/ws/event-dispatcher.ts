@@ -17,6 +17,7 @@ const BUFFER_TTL = 5 * 60 * 1000; // 5 minutes
 class EventDispatcher {
   sessions = new Map<string, WsSession>();
   userSessions = new Map<string, Set<string>>();
+  private channelSessions = new Map<string, Set<string>>();
 
   addSession(sessionId: string, userId: string, ws: WebSocket): WsSession {
     const session: WsSession = {
@@ -42,6 +43,15 @@ class EventDispatcher {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
+    // Clean up channel index
+    for (const channelId of session.subscribedChannels) {
+      const channelSet = this.channelSessions.get(channelId);
+      if (channelSet) {
+        channelSet.delete(sessionId);
+        if (channelSet.size === 0) this.channelSessions.delete(channelId);
+      }
+    }
+
     this.sessions.delete(sessionId);
     const userSet = this.userSessions.get(session.userId);
     if (userSet) {
@@ -52,12 +62,27 @@ class EventDispatcher {
 
   subscribe(sessionId: string, channelId: string) {
     const session = this.sessions.get(sessionId);
-    if (session) session.subscribedChannels.add(channelId);
+    if (session) {
+      session.subscribedChannels.add(channelId);
+      let channelSet = this.channelSessions.get(channelId);
+      if (!channelSet) {
+        channelSet = new Set();
+        this.channelSessions.set(channelId, channelSet);
+      }
+      channelSet.add(sessionId);
+    }
   }
 
   unsubscribe(sessionId: string, channelId: string) {
     const session = this.sessions.get(sessionId);
-    if (session) session.subscribedChannels.delete(channelId);
+    if (session) {
+      session.subscribedChannels.delete(channelId);
+      const channelSet = this.channelSessions.get(channelId);
+      if (channelSet) {
+        channelSet.delete(sessionId);
+        if (channelSet.size === 0) this.channelSessions.delete(channelId);
+      }
+    }
   }
 
   private send(session: WsSession, event: string, data: unknown) {
@@ -75,8 +100,11 @@ class EventDispatcher {
   }
 
   dispatchToChannel(channelId: string, event: string, data: unknown) {
-    for (const session of this.sessions.values()) {
-      if (session.authenticated && session.subscribedChannels.has(channelId)) {
+    const sessionIds = this.channelSessions.get(channelId);
+    if (!sessionIds) return;
+    for (const sid of sessionIds) {
+      const session = this.sessions.get(sid);
+      if (session?.authenticated) {
         this.send(session, event, data);
       }
     }
