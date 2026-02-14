@@ -7,6 +7,7 @@ import { formatRole } from '../../utils/format.js';
 import { requirePermission, requireMember } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
+import { eventDispatcher } from '../../ws/event-dispatcher.js';
 
 export const rolesRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -61,7 +62,9 @@ export const rolesRouter = router({
       });
 
       const [row] = await d.select().from(roles).where(eq(roles.id, id)).limit(1);
-      return formatRole(row!);
+      const formatted = formatRole(row!);
+      eventDispatcher.dispatchToAll('role.create', formatted);
+      return formatted;
     }),
 
   update: protectedProcedure
@@ -103,7 +106,9 @@ export const rolesRouter = router({
       });
 
       const [updated] = await ctx.db.select().from(roles).where(eq(roles.id, input.role_id)).limit(1);
-      return formatRole(updated!);
+      const formatted = formatRole(updated!);
+      eventDispatcher.dispatchToAll('role.update', formatted);
+      return formatted;
     }),
 
   delete: protectedProcedure
@@ -131,6 +136,7 @@ export const rolesRouter = router({
         details: { name: role.name },
       });
 
+      eventDispatcher.dispatchToAll('role.delete', { id: input.role_id });
       return { success: true };
     }),
 
@@ -149,6 +155,13 @@ export const rolesRouter = router({
           .set({ position: item.position })
           .where(and(eq(roles.id, item.role_id), eq(roles.serverId, ctx.serverId)));
       }
+
+      const allRoles = await ctx.db
+        .select()
+        .from(roles)
+        .where(eq(roles.serverId, ctx.serverId))
+        .orderBy(desc(roles.position));
+      eventDispatcher.dispatchToAll('role.reorder', allRoles.map(formatRole));
 
       return { success: true };
     }),

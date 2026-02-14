@@ -7,6 +7,7 @@ import { formatCategory } from '../../utils/format.js';
 import { requirePermission } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
+import { eventDispatcher } from '../../ws/event-dispatcher.js';
 
 export const categoriesRouter = router({
   create: protectedProcedure
@@ -39,7 +40,9 @@ export const categoriesRouter = router({
       });
 
       const [row] = await d.select().from(categories).where(eq(categories.id, id)).limit(1);
-      return formatCategory(row!);
+      const formatted = formatCategory(row!);
+      eventDispatcher.dispatchToAll('category.create', formatted);
+      return formatted;
     }),
 
   update: protectedProcedure
@@ -70,7 +73,9 @@ export const categoriesRouter = router({
       });
 
       const [updated] = await ctx.db.select().from(categories).where(eq(categories.id, input.category_id)).limit(1);
-      return formatCategory(updated!);
+      const formatted = formatCategory(updated!);
+      eventDispatcher.dispatchToAll('category.update', formatted);
+      return formatted;
     }),
 
   delete: protectedProcedure
@@ -98,6 +103,7 @@ export const categoriesRouter = router({
         details: { name: cat.name },
       });
 
+      eventDispatcher.dispatchToAll('category.delete', { id: input.category_id });
       return { success: true };
     }),
 
@@ -116,6 +122,12 @@ export const categoriesRouter = router({
           .set({ position: item.position })
           .where(and(eq(categories.id, item.category_id), eq(categories.serverId, ctx.serverId)));
       }
+
+      const allCategories = await ctx.db
+        .select()
+        .from(categories)
+        .where(eq(categories.serverId, ctx.serverId));
+      eventDispatcher.dispatchToAll('category.reorder', allCategories.map(formatCategory));
 
       return { success: true };
     }),

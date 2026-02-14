@@ -9,6 +9,7 @@ import { ectoError } from '../../utils/errors.js';
 import { generateInviteCode } from '../../utils/invite-code.js';
 import { formatInvite } from '../../utils/format.js';
 import { resolveUserProfiles } from '../../utils/resolve-profile.js';
+import { eventDispatcher } from '../../ws/event-dispatcher.js';
 
 export const invitesRouter = router({
   create: protectedProcedure
@@ -47,8 +48,10 @@ export const invitesRouter = router({
       const profiles = await resolveUserProfiles(ctx.db, [ctx.user.id]);
       const profile = profiles.get(ctx.user.id);
 
+      const invite = formatInvite(row!, profile?.username ?? 'Unknown');
+      eventDispatcher.dispatchToAll('invite.create', invite);
       return {
-        invite: formatInvite(row!, profile?.username ?? 'Unknown'),
+        invite,
         url: `ecto://${code}`,
       };
     }),
@@ -91,6 +94,7 @@ export const invitesRouter = router({
         targetId: input.invite_id,
       });
 
+      eventDispatcher.dispatchToAll('invite.delete', { id: input.invite_id });
       return { success: true };
     }),
 });

@@ -10,6 +10,35 @@ import { ectoError } from '../../utils/errors.js';
 import { resolveUserProfiles } from '../../utils/resolve-profile.js';
 import { voiceStateManager } from '../../services/voice-state.js';
 import { formatVoiceState } from '../../utils/format.js';
+import { eventDispatcher } from '../../ws/event-dispatcher.js';
+import { voiceManager } from '../../voice/index.js';
+import { presenceManager } from '../../services/presence.js';
+
+/** Clean up voice, presence, and WS sessions for a user being removed from the server */
+function cleanupAndDisconnect(userId: string, closeCode: number, reason: string) {
+  // Voice cleanup (must happen before removeSession)
+  const voiceState = voiceStateManager.getByUser(userId);
+  if (voiceState) {
+    voiceStateManager.leave(userId);
+    voiceManager.leaveChannel(userId).catch(() => {});
+    eventDispatcher.dispatchToAll('voice.state_update', {
+      ...formatVoiceState(voiceState),
+      _removed: true,
+    });
+  }
+
+  // Presence cleanup
+  presenceManager.update(userId, 'offline', null);
+  eventDispatcher.dispatchToAll('presence.update', {
+    user_id: userId,
+    status: 'offline',
+    custom_text: null,
+    last_active_at: new Date().toISOString(),
+  });
+
+  // Close WS + remove sessions
+  eventDispatcher.disconnectUser(userId, closeCode, reason);
+}
 
 async function getHighestRolePosition(d: typeof import('../../db/index.js').db extends () => infer R ? R : never, serverId: string, userId: string): Promise<number> {
   const [member] = await d
@@ -151,6 +180,8 @@ export const membersRouter = router({
         details: { reason: input.reason },
       });
 
+      eventDispatcher.dispatchToAll('member.leave', { user_id: input.user_id });
+      cleanupAndDisconnect(input.user_id, 4003, 'Kicked');
       return { success: true };
     }),
 
@@ -213,6 +244,8 @@ export const membersRouter = router({
         details: { reason: input.reason, delete_messages: input.delete_messages },
       });
 
+      eventDispatcher.dispatchToAll('member.leave', { user_id: input.user_id });
+      cleanupAndDisconnect(input.user_id, 4003, 'Banned');
       return { success: true };
     }),
 
@@ -272,7 +305,9 @@ export const membersRouter = router({
       // Re-fetch member
       const [memberRow] = await d.select().from(members).where(eq(members.id, target.id)).limit(1);
       const profile = (await resolveUserProfiles(d, [input.user_id])).get(input.user_id) ?? { username: 'Unknown', display_name: null, avatar_url: null };
-      return formatMember(memberRow!, profile, allRoleIds);
+      const formatted = formatMember(memberRow!, profile, allRoleIds);
+      eventDispatcher.dispatchToAll('member.update', formatted);
+      return formatted;
     }),
 
   updateNickname: protectedProcedure
@@ -291,7 +326,9 @@ export const membersRouter = router({
       const [memberRow] = await d.select().from(members).where(eq(members.id, target.id)).limit(1);
       const profile = (await resolveUserProfiles(d, [input.user_id])).get(input.user_id) ?? { username: 'Unknown', display_name: null, avatar_url: null };
       const mrRows = await d.select({ roleId: memberRoles.roleId }).from(memberRoles).where(eq(memberRoles.memberId, target.id));
-      return formatMember(memberRow!, profile, mrRows.map((r) => r.roleId));
+      const formatted = formatMember(memberRow!, profile, mrRows.map((r) => r.roleId));
+      eventDispatcher.dispatchToAll('member.update', formatted);
+      return formatted;
     }),
 
   voiceMute: protectedProcedure
@@ -320,7 +357,9 @@ export const membersRouter = router({
       });
 
       const updated = voiceStateManager.getByUser(input.user_id)!;
-      return formatVoiceState(updated);
+      const formatted = formatVoiceState(updated);
+      eventDispatcher.dispatchToAll('voice.state_update', formatted);
+      return formatted;
     }),
 
   updateDmPreference: protectedProcedure

@@ -236,6 +236,12 @@ export const channelsRouter = router({
         await d.update(channels).set(updates).where(and(eq(channels.id, item.channel_id), eq(channels.serverId, ctx.serverId)));
       }
 
+      const allChannels = await d
+        .select()
+        .from(channels)
+        .where(eq(channels.serverId, ctx.serverId));
+      eventDispatcher.dispatchToAll('channel.reorder', allChannels.map(formatChannel));
+
       return { success: true };
     }),
 });

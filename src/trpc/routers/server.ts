@@ -22,6 +22,9 @@ import { requirePermission, requireMember } from '../../utils/permission-context
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
+import { voiceStateManager } from '../../services/voice-state.js';
+import { voiceManager } from '../../voice/index.js';
+import { formatVoiceState } from '../../utils/format.js';
 import { signServerToken } from '../../utils/jwt.js';
 import { registerLocal, loginLocal } from './local-auth.js';
 import { resolveUserProfile, resolveUserProfiles } from '../../utils/resolve-profile.js';
@@ -102,7 +105,9 @@ export const serverRouter = router({
         .from(servers)
         .where(eq(servers.id, ctx.serverId))
         .limit(1);
-      return formatServer(updated!);
+      const formatted = formatServer(updated!);
+      eventDispatcher.dispatchToAll('server.update', formatted);
+      return formatted;
     }),
 
   join: publicProcedure
@@ -271,6 +276,18 @@ export const serverRouter = router({
     }
 
     const member = await requireMember(d, ctx.serverId, ctx.user.id);
+
+    // Clean up voice state before removing member
+    const voiceState = voiceStateManager.getByUser(ctx.user.id);
+    if (voiceState) {
+      voiceStateManager.leave(ctx.user.id);
+      voiceManager.leaveChannel(ctx.user.id).catch(() => {});
+      eventDispatcher.dispatchToAll('voice.state_update', {
+        ...formatVoiceState(voiceState),
+        _removed: true,
+      });
+    }
+
     await d.delete(members).where(eq(members.id, member.id));
     eventDispatcher.dispatchToAll('member.leave', { user_id: ctx.user.id });
     return { success: true };
@@ -295,6 +312,7 @@ export const serverRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_SERVER);
       await ctx.db.update(servers).set({ iconUrl: input.icon_url, updatedAt: new Date() }).where(eq(servers.id, ctx.serverId));
+      eventDispatcher.dispatchToAll('server.update', { icon_url: input.icon_url });
       return { icon_url: input.icon_url, sizes: {} as Record<string, string> };
     }),
 
