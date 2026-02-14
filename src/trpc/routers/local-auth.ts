@@ -9,17 +9,6 @@ export async function registerLocal(
   d: Db,
   input: { username: string; password: string },
 ): Promise<{ id: string; username: string }> {
-  // Check username uniqueness
-  const [existing] = await d
-    .select({ id: localUsers.id })
-    .from(localUsers)
-    .where(eq(localUsers.username, input.username))
-    .limit(1);
-
-  if (existing) {
-    throw ectoError('CONFLICT', 1003, 'Username already taken');
-  }
-
   const hash = await argon2.hash(input.password);
   const id = generateUUIDv7();
 

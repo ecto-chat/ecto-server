@@ -8,6 +8,13 @@
       "when": 1770880847169,
       "tag": "0000_aspiring_felicia_hardy",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1771084800000,
+      "tag": "0001_drop_local_users_username_unique",
+      "breakpoints": true
     }
   ]
 }

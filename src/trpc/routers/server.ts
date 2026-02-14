@@ -52,11 +52,15 @@ export const serverRouter = router({
         server: ReturnType<typeof formatServer>;
         member_count: number;
         online_count: number;
+        require_invite: boolean;
+        allow_local_accounts: boolean;
         channels?: ReturnType<typeof formatChannel>[];
       } = {
         server: formatServer(server, srvConfig),
         member_count: memberCount?.count ?? 0,
         online_count: onlineCount,
+        require_invite: srvConfig?.requireInvite ?? false,
+        allow_local_accounts: srvConfig?.allowLocalAccounts ?? true,
       };
 
       // If authenticated and a member, include channels
