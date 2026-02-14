@@ -14,6 +14,10 @@ export function setServerId(id: string) {
   _serverId = id;
 }
 
+export function getServerId(): string {
+  return _serverId!;
+}
+
 export async function createContext(opts: CreateHTTPContextOptions): Promise<Context> {
   let user: AuthUser | null = null;
 

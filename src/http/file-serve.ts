@@ -18,6 +18,32 @@ export async function handleFileServe(req: IncomingMessage, res: ServerResponse)
       return;
     }
 
+    // Try direct disk path first (for icons and other static files)
+    // URL: /files/{serverId}/icons/{filename} → UPLOAD_DIR/{serverId}/icons/{filename}
+    const diskPath = path.join(config.UPLOAD_DIR, ...parts.slice(1));
+    const safePath = path.resolve(diskPath);
+    if (safePath.startsWith(path.resolve(config.UPLOAD_DIR))) {
+      try {
+        const stat = await fs.promises.stat(safePath);
+        if (stat.isFile()) {
+          const ext = path.extname(safePath).toLowerCase();
+          const mimeTypes: Record<string, string> = {
+            '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+          };
+          res.writeHead(200, {
+            'Content-Type': mimeTypes[ext] ?? 'application/octet-stream',
+            'Content-Length': stat.size.toString(),
+            'Cache-Control': 'public, max-age=86400',
+          });
+          fs.createReadStream(safePath).pipe(res);
+          return;
+        }
+      } catch {
+        // Not a direct file, fall through to attachment lookup
+      }
+    }
+
     const attachmentId = parts[1]!;
     const d = db();
 
@@ -29,13 +55,11 @@ export async function handleFileServe(req: IncomingMessage, res: ServerResponse)
 
     if (!attachment) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Attachment not found' }));
+      res.end(JSON.stringify({ error: 'Not found' }));
       return;
     }
 
     // Find file on disk — search upload dirs
-    const globPattern = path.join(config.UPLOAD_DIR, '**', attachmentId, attachment.filename);
-    // Simple: walk the upload dir to find the file
     const searchDirs = await findAttachmentFile(attachmentId, attachment.filename);
     if (!searchDirs) {
       res.writeHead(404, { 'Content-Type': 'application/json' });

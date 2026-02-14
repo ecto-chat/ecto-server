@@ -4,6 +4,7 @@ import type { Config } from '../config/index.js';
 import { appRouter } from '../trpc/router.js';
 import { createContext } from '../trpc/context.js';
 import { handleFileUpload } from './file-upload.js';
+import { handleIconUpload } from './icon-upload.js';
 import { handleFileServe } from './file-serve.js';
 import { setupMainWebSocket } from '../ws/main-ws.js';
 import { setupNotifyWebSocket } from '../ws/notify-ws.js';
@@ -33,6 +34,12 @@ export async function createServer(_config: Config) {
     if (url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+
+    // Icon upload
+    if (url.pathname === '/upload/icon' && req.method === 'POST') {
+      await handleIconUpload(req, res);
       return;
     }
 

@@ -22,14 +22,18 @@ interface ProfileData {
   discriminator?: string;
 }
 
-export function formatServer(row: {
-  id: string;
-  name: string;
-  description: string | null;
-  iconUrl: string | null;
-  address: string | null;
-  centralConnected: boolean;
-}): Server {
+export function formatServer(
+  row: {
+    id: string;
+    name: string;
+    description: string | null;
+    iconUrl: string | null;
+    address: string | null;
+    centralConnected: boolean;
+    adminUserId: string | null;
+  },
+  config?: { setupCompleted: boolean },
+): Server {
   return {
     id: row.id,
     name: row.name,
@@ -37,6 +41,8 @@ export function formatServer(row: {
     icon_url: row.iconUrl,
     address: row.address ?? '',
     central_connected: row.centralConnected,
+    setup_completed: config?.setupCompleted ?? true,
+    admin_user_id: row.adminUserId,
   };
 }
 

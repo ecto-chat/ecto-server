@@ -12,6 +12,7 @@ import {
   roles,
   readStates,
   memberRoles,
+  serverConfig,
 } from '../db/schema/index.js';
 import { eq, and, inArray } from 'drizzle-orm';
 import { formatServer, formatChannel, formatCategory, formatRole, formatMember, formatReadState, formatVoiceState } from '../utils/format.js';
@@ -109,11 +110,12 @@ export function setupMainWebSocket(): WebSocketServer {
           presenceManager.update(user.id, 'online', null);
 
           // Build system.ready payload
-          const [allChannels, allCategories, allRoles, userReadStates] = await Promise.all([
+          const [allChannels, allCategories, allRoles, userReadStates, [srvConfig]] = await Promise.all([
             d.select().from(channels).where(eq(channels.serverId, server.id)),
             d.select().from(categories).where(eq(categories.serverId, server.id)),
             d.select().from(roles).where(eq(roles.serverId, server.id)),
             d.select().from(readStates).where(eq(readStates.userId, user.id)),
+            d.select().from(serverConfig).where(eq(serverConfig.serverId, server.id)).limit(1),
           ]);
 
           // Get members (max 1000)
@@ -140,7 +142,7 @@ export function setupMainWebSocket(): WebSocketServer {
               session_id: sessionId,
               user_id: user.id,
               protocol_version: PROTOCOL_VERSION,
-              server: formatServer(server),
+              server: formatServer(server, srvConfig),
               channels: allChannels.map(formatChannel),
               categories: allCategories.map(formatCategory),
               roles: allRoles.map(formatRole),

@@ -32,7 +32,10 @@ export const serverRouter = router({
     .input(z.object({ invite_code: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
       const d = ctx.db;
-      const [server] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
+      const [[server], [srvConfig]] = await Promise.all([
+        d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1),
+        d.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1),
+      ]);
       if (!server) throw ectoError('NOT_FOUND', 2000, 'Server not found');
 
       const [memberCount] = await d
@@ -48,7 +51,7 @@ export const serverRouter = router({
         online_count: number;
         channels?: ReturnType<typeof formatChannel>[];
       } = {
-        server: formatServer(server),
+        server: formatServer(server, srvConfig),
         member_count: memberCount?.count ?? 0,
         online_count: onlineCount,
       };

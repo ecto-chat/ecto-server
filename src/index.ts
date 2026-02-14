@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { createServer } from './http/server.js';
 import { config } from './config/index.js';
 import { getDb, db } from './db/index.js';
-import { servers, serverConfig, roles, channels } from './db/schema/index.js';
+import { servers, serverConfig, roles } from './db/schema/index.js';
 import { eq } from 'drizzle-orm';
 import { generateUUIDv7, Permissions } from 'ecto-shared';
 import { setServerId } from './trpc/context.js';
@@ -74,25 +74,7 @@ async function main() {
     console.log('Created @everyone role');
   }
 
-  // 5. Create #general text channel if none exist
-  const [existingChannel] = await d
-    .select()
-    .from(channels)
-    .where(eq(channels.serverId, serverId))
-    .limit(1);
-
-  if (!existingChannel) {
-    await d.insert(channels).values({
-      id: generateUUIDv7(),
-      serverId,
-      name: 'general',
-      type: 'text',
-      position: 0,
-    });
-    console.log('Created #general channel');
-  }
-
-  // 6. Initialize voice (mediasoup workers)
+  // 5. Initialize voice (mediasoup workers)
   await voiceManager.initialize();
 
   // 7. Start HTTP server

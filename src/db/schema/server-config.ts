@@ -5,6 +5,7 @@ export const serverConfig = pgTable('server_config', {
   serverId: uuid('server_id')
     .primaryKey()
     .references(() => servers.id),
+  setupCompleted: boolean('setup_completed').notNull().default(false),
   allowLocalAccounts: boolean('allow_local_accounts').notNull().default(true),
   requireInvite: boolean('require_invite').notNull().default(false),
   allowMemberDms: boolean('allow_member_dms').notNull().default(false),

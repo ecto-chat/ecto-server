@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
-import { serverConfig } from '../../db/schema/index.js';
+import { serverConfig, servers } from '../../db/schema/index.js';
 import { eq } from 'drizzle-orm';
 import { Permissions } from 'ecto-shared';
 import { requirePermission } from '../../utils/permission-context.js';
@@ -59,4 +59,24 @@ export const serverConfigRouter = router({
 
       return { success: true };
     }),
+
+  completeSetup: protectedProcedure.mutation(async ({ ctx }) => {
+    const d = ctx.db;
+    const [server] = await d
+      .select({ adminUserId: servers.adminUserId })
+      .from(servers)
+      .where(eq(servers.id, ctx.serverId))
+      .limit(1);
+
+    if (!server || server.adminUserId !== ctx.user.id) {
+      throw ectoError('FORBIDDEN', 1006, 'Only the server admin can complete setup');
+    }
+
+    await d
+      .update(serverConfig)
+      .set({ setupCompleted: true, updatedAt: new Date() })
+      .where(eq(serverConfig.serverId, ctx.serverId));
+
+    return { success: true };
+  }),
 });

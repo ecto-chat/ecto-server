@@ -166,6 +166,7 @@ CREATE TABLE "roles" (
 --> statement-breakpoint
 CREATE TABLE "server_config" (
 	"server_id" uuid PRIMARY KEY NOT NULL,
+	"setup_completed" boolean DEFAULT false NOT NULL,
 	"allow_local_accounts" boolean DEFAULT true NOT NULL,
 	"require_invite" boolean DEFAULT false NOT NULL,
 	"allow_member_dms" boolean DEFAULT false NOT NULL,
