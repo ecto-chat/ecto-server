@@ -1,5 +1,6 @@
 export interface VoiceStateData {
   userId: string;
+  sessionId: string;
   channelId: string;
   selfMute: boolean;
   selfDeaf: boolean;
@@ -12,9 +13,10 @@ export interface VoiceStateData {
 export class VoiceStateManager {
   private states = new Map<string, VoiceStateData>();
 
-  join(userId: string, channelId: string): VoiceStateData {
+  join(userId: string, sessionId: string, channelId: string): VoiceStateData {
     const state: VoiceStateData = {
       userId,
+      sessionId,
       channelId,
       selfMute: false,
       selfDeaf: false,

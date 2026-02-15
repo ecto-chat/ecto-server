@@ -50,14 +50,47 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       // Already in voice?
       const existing = voiceStateManager.getByUser(session.userId);
       if (existing) {
-        // Leave current channel first
+        if (existing.channelId === channelId && existing.sessionId === session.sessionId) {
+          // Same channel, same session — no-op
+          return;
+        }
+
+        const force = data['force'] === true;
+        if (!force) {
+          // Respond with already_connected — let client confirm
+          session.ws.send(JSON.stringify({
+            event: 'voice.already_connected',
+            data: {
+              channel_id: existing.channelId,
+              session_id: existing.sessionId,
+              same_session: existing.sessionId === session.sessionId,
+            },
+          }));
+          return;
+        }
+
+        // Force: leave current channel
         voiceStateManager.leave(session.userId);
         await voiceManager.leaveChannel(session.userId);
-        eventDispatcher.dispatchToAll('voice.state_update', formatVoiceState(existing));
+        eventDispatcher.dispatchToAll('voice.state_update', {
+          ...formatVoiceState(existing),
+          _removed: true,
+        });
+
+        // Notify the old session that voice was transferred
+        if (existing.sessionId !== session.sessionId) {
+          const oldSession = eventDispatcher.getSession(existing.sessionId);
+          if (oldSession) {
+            oldSession.ws.send(JSON.stringify({
+              event: 'voice.transferred',
+              data: { channel_id: existing.channelId },
+            }));
+          }
+        }
       }
 
       // Join
-      const state = voiceStateManager.join(session.userId, channelId);
+      const state = voiceStateManager.join(session.userId, session.sessionId, channelId);
       // Get/create mediasoup router + transports
       try {
         const router = await voiceManager.getOrCreateRouter(channelId);

@@ -285,9 +285,9 @@ export function setupMainWebSocket(): WebSocketServer {
 
       const session = eventDispatcher.getSession(sessionId);
       if (session) {
-        // Clean up voice state if user was in voice
+        // Clean up voice state only if THIS session owns it
         const voiceState = voiceStateManager.getByUser(session.userId);
-        if (voiceState) {
+        if (voiceState && voiceState.sessionId === sessionId) {
           voiceStateManager.leave(session.userId);
           voiceManager.leaveChannel(session.userId).catch(() => {});
           eventDispatcher.dispatchToAll('voice.state_update', {
