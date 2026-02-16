@@ -10,45 +10,7 @@ import { eq } from 'drizzle-orm';
 import { getServerId } from '../trpc/context.js';
 import { requirePermission } from '../utils/permission-context.js';
 import { Permissions } from 'ecto-shared';
-
-function parseMultipart(
-  req: IncomingMessage,
-  boundary: string,
-): Promise<{ file?: { filename: string; contentType: string; data: Buffer } }> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => {
-      const body = Buffer.concat(chunks);
-      const bodyStr = body.toString('latin1');
-      const parts = bodyStr.split(`--${boundary}`).filter((p) => p && p !== '--\r\n' && p !== '--');
-
-      let file: { filename: string; contentType: string; data: Buffer } | undefined;
-
-      for (const part of parts) {
-        const headerEnd = part.indexOf('\r\n\r\n');
-        if (headerEnd === -1) continue;
-
-        const headers = part.slice(0, headerEnd);
-        const content = part.slice(headerEnd + 4, part.endsWith('\r\n') ? part.length - 2 : part.length);
-
-        const filenameMatch = headers.match(/filename="([^"]+)"/);
-        const ctMatch = headers.match(/Content-Type:\s*(.+)/i);
-
-        if (filenameMatch) {
-          const start = body.indexOf(Buffer.from(content, 'latin1'));
-          file = {
-            filename: filenameMatch[1]!,
-            contentType: ctMatch?.[1]?.trim() ?? 'image/png',
-            data: body.subarray(start, start + Buffer.byteLength(content, 'latin1')),
-          };
-        }
-      }
-      resolve({ file });
-    });
-    req.on('error', reject);
-  });
-}
+import { parseMultipart } from './multipart.js';
 
 export async function handleIconUpload(req: IncomingMessage, res: ServerResponse) {
   try {

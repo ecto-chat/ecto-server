@@ -90,9 +90,11 @@ class EventDispatcher {
     const msg: WsMessage = { event, data, seq: session.seq };
 
     session.eventBuffer.push({ seq: session.seq, event, data, timestamp: Date.now() });
-    // Trim old buffer entries
-    const cutoff = Date.now() - BUFFER_TTL;
-    session.eventBuffer = session.eventBuffer.filter((e) => e.timestamp > cutoff);
+    // Trim old buffer entries lazily (only when size exceeds threshold)
+    if (session.eventBuffer.length > 500) {
+      const cutoff = Date.now() - BUFFER_TTL;
+      session.eventBuffer = session.eventBuffer.filter((e) => e.timestamp > cutoff);
+    }
 
     if (session.ws.readyState === session.ws.OPEN) {
       session.ws.send(JSON.stringify(msg));

@@ -14,6 +14,7 @@ export const messages = pgTable(
     mentionEveryone: boolean('mention_everyone').notNull().default(false),
     mentionRoles: text('mention_roles').array(),
     mentionUsers: text('mention_users').array(),
+    webhookId: uuid('webhook_id'),
     editedAt: timestamp('edited_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

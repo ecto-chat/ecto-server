@@ -1,58 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { pipeline } from 'node:stream/promises';
 import fs from 'node:fs';
 import path from 'node:path';
 import { verifyToken } from '../middleware/auth.js';
 import { db } from '../db/index.js';
-import { attachments, members, channels, serverConfig } from '../db/schema/index.js';
+import { attachments, channels, serverConfig } from '../db/schema/index.js';
 import { config } from '../config/index.js';
 import { generateUUIDv7 } from 'ecto-shared';
-import { eq, and } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { requirePermission } from '../utils/permission-context.js';
 import { Permissions } from 'ecto-shared';
-
-function parseMultipart(
-  req: IncomingMessage,
-  boundary: string,
-): Promise<{ fields: Record<string, string>; file?: { filename: string; contentType: string; data: Buffer } }> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => {
-      const body = Buffer.concat(chunks);
-      const bodyStr = body.toString('latin1');
-      const parts = bodyStr.split(`--${boundary}`).filter((p) => p && p !== '--\r\n' && p !== '--');
-
-      const fields: Record<string, string> = {};
-      let file: { filename: string; contentType: string; data: Buffer } | undefined;
-
-      for (const part of parts) {
-        const headerEnd = part.indexOf('\r\n\r\n');
-        if (headerEnd === -1) continue;
-
-        const headers = part.slice(0, headerEnd);
-        const content = part.slice(headerEnd + 4, part.endsWith('\r\n') ? part.length - 2 : part.length);
-
-        const filenameMatch = headers.match(/filename="([^"]+)"/);
-        const nameMatch = headers.match(/name="([^"]+)"/);
-        const ctMatch = headers.match(/Content-Type:\s*(.+)/i);
-
-        if (filenameMatch && nameMatch) {
-          const start = body.indexOf(Buffer.from(content, 'latin1'));
-          file = {
-            filename: filenameMatch[1]!,
-            contentType: ctMatch?.[1]?.trim() ?? 'application/octet-stream',
-            data: body.subarray(start, start + Buffer.byteLength(content, 'latin1')),
-          };
-        } else if (nameMatch) {
-          fields[nameMatch[1]!] = content.trim();
-        }
-      }
-      resolve({ fields, file });
-    });
-    req.on('error', reject);
-  });
-}
+import { parseMultipart } from './multipart.js';
 
 export async function handleFileUpload(req: IncomingMessage, res: ServerResponse) {
   try {

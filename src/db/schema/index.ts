@@ -16,3 +16,4 @@ export { invites } from './invites.js';
 export { bans } from './bans.js';
 export { auditLog } from './audit-log.js';
 export { dmConversations } from './dm-conversations.js';
+export { webhooks } from './webhooks.js';

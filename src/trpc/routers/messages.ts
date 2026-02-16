@@ -8,24 +8,9 @@ import { requirePermission, requireMember } from '../../utils/permission-context
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { resolveUserProfiles } from '../../utils/resolve-profile.js';
-import type { ReactionGroup } from 'ecto-shared';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
 import { sendNotification } from '../../ws/notify-ws.js';
-
-function groupReactions(reactionRows: { emoji: string; userId: string }[], currentUserId: string): ReactionGroup[] {
-  const groups = new Map<string, { emoji: string; users: string[] }>();
-  for (const r of reactionRows) {
-    const g = groups.get(r.emoji) ?? { emoji: r.emoji, users: [] };
-    g.users.push(r.userId);
-    groups.set(r.emoji, g);
-  }
-  return [...groups.values()].map((g) => ({
-    emoji: g.emoji,
-    count: g.users.length,
-    users: g.users,
-    me: g.users.includes(currentUserId),
-  }));
-}
+import { groupReactions, hydrateMessages } from '../../utils/message-helpers.js';
 
 export const messagesRouter = router({
   list: protectedProcedure
@@ -60,47 +45,7 @@ export const messagesRouter = router({
 
       if (rows.length === 0) return { messages: [], has_more: false };
 
-      const msgIds = rows.map((m) => m.id);
-      const authorIds = [...new Set(rows.map((m) => m.authorId))];
-
-      // Batch load attachments, reactions, profiles, nicknames
-      const [attachmentRows, reactionRows, profiles, memberRows] = await Promise.all([
-        d.select().from(attachments).where(inArray(attachments.messageId, msgIds)),
-        d.select().from(reactions).where(inArray(reactions.messageId, msgIds)),
-        resolveUserProfiles(d, authorIds),
-        d.select({ userId: members.userId, nickname: members.nickname })
-          .from(members)
-          .where(and(eq(members.serverId, ctx.serverId), inArray(members.userId, authorIds))),
-      ]);
-
-      const attachmentsByMsg = new Map<string, typeof attachmentRows>();
-      for (const a of attachmentRows) {
-        if (!a.messageId) continue;
-        const arr = attachmentsByMsg.get(a.messageId) ?? [];
-        arr.push(a);
-        attachmentsByMsg.set(a.messageId, arr);
-      }
-
-      const reactionsByMsg = new Map<string, typeof reactionRows>();
-      for (const r of reactionRows) {
-        const arr = reactionsByMsg.get(r.messageId) ?? [];
-        arr.push(r);
-        reactionsByMsg.set(r.messageId, arr);
-      }
-
-      const nicknameMap = new Map(memberRows.map((m) => [m.userId, m.nickname]));
-
-      const formatted = rows.map((m) => {
-        const profile = profiles.get(m.authorId) ?? { username: 'Unknown', display_name: null, avatar_url: null };
-        const author = formatMessageAuthor(profile, m.authorId, nicknameMap.get(m.authorId) ?? null);
-        const msgAttachments = (attachmentsByMsg.get(m.id) ?? []).map(formatAttachment);
-        const msgReactions = groupReactions(
-          (reactionsByMsg.get(m.id) ?? []).map((r) => ({ emoji: r.emoji, userId: r.userId })),
-          ctx.user.id,
-        );
-        return formatMessage(m, author, msgAttachments, msgReactions);
-      });
-
+      const formatted = await hydrateMessages(d, ctx.serverId, ctx.user.id, rows);
       return { messages: formatted.reverse(), has_more };
     }),
 

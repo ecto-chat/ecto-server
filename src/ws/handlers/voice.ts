@@ -10,14 +10,14 @@ import { computePermissions, hasPermission } from 'ecto-shared';
 import { db } from '../../db/index.js';
 import { servers, channels } from '../../db/schema/index.js';
 import { eq, and } from 'drizzle-orm';
+import { voiceJoinSchema, voiceConnectSchema, voiceCapabilitiesSchema, voiceProduceSchema, voiceProducerIdSchema, voiceConsumerIdSchema, voiceMuteSchema, voiceQualitySchema } from '../schemas.js';
 
 export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
-  const data = msg.data as Record<string, unknown>;
-
   switch (msg.event) {
     case 'voice.join': {
-      const channelId = data['channel_id'] as string;
-      if (!channelId) return;
+      const joinResult = voiceJoinSchema.safeParse(msg.data);
+      if (!joinResult.success) return;
+      const channelId = joinResult.data.channel_id;
 
       const d = db();
       const [server] = await d.select().from(servers).limit(1);
@@ -55,7 +55,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
           return;
         }
 
-        const force = data['force'] === true;
+        const force = joinResult.data.force === true;
         if (!force) {
           // Respond with already_connected — let client confirm
           session.ws.send(JSON.stringify({
@@ -145,22 +145,19 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
     }
 
     case 'voice.connect_transport': {
-      const transportId = data['transport_id'] as string;
-      const dtlsParameters = data['dtls_parameters'] as unknown;
-      if (transportId && dtlsParameters) {
-        await voiceManager.connectTransport(transportId, dtlsParameters);
+      const connectResult = voiceConnectSchema.safeParse(msg.data);
+      if (connectResult.success) {
+        await voiceManager.connectTransport(connectResult.data.transport_id, connectResult.data.dtls_parameters);
       }
       break;
     }
 
     case 'voice.capabilities': {
-      const rtpCapabilities = data['rtp_capabilities'] as unknown;
-      if (!rtpCapabilities) break;
+      const capsResult = voiceCapabilitiesSchema.safeParse(msg.data);
+      if (!capsResult.success) break;
+      const rtpCapabilities = capsResult.data.rtp_capabilities as import('mediasoup').types.RtpCapabilities;
 
-      voiceManager.setDeviceCapabilities(
-        session.userId,
-        rtpCapabilities as import('mediasoup').types.RtpCapabilities,
-      );
+      voiceManager.setDeviceCapabilities(session.userId, rtpCapabilities);
 
       // Now create consumers for existing producers using the client's real capabilities
       const voiceState = voiceStateManager.getByUser(session.userId);
@@ -172,7 +169,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
               voiceState.channelId,
               session.userId,
               prod.producerId,
-              rtpCapabilities as import('mediasoup').types.RtpCapabilities,
+              rtpCapabilities,
             );
             if (consumer) {
               session.ws.send(JSON.stringify({
@@ -196,12 +193,9 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
     }
 
     case 'voice.produce': {
-      const transportId = data['transport_id'] as string;
-      const kind = data['kind'] as 'audio' | 'video';
-      const rtpParameters = data['rtp_parameters'] as unknown;
-      const source = data['source'] as string | undefined;
-
-      if (transportId && kind && rtpParameters) {
+      const produceResult = voiceProduceSchema.safeParse(msg.data);
+      if (produceResult.success) {
+        const { transport_id: transportId, kind, rtp_parameters: rtpParameters, source } = produceResult.data;
         try {
           const producer = await voiceManager.createProducer(transportId, kind, rtpParameters, source);
           session.ws.send(JSON.stringify({
@@ -247,13 +241,13 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
     }
 
     case 'voice.produce_stop': {
-      const producerId = data['producer_id'] as string;
-      if (producerId) {
-        voiceManager.closeProducer(producerId);
+      const stopResult = voiceProducerIdSchema.safeParse(msg.data);
+      if (stopResult.success) {
+        voiceManager.closeProducer(stopResult.data.producer_id);
         const state = voiceStateManager.getByUser(session.userId);
         if (state) {
           eventDispatcher.dispatchToAll('voice.producer_closed', {
-            producer_id: producerId,
+            producer_id: stopResult.data.producer_id,
             user_id: session.userId,
             channel_id: state.channelId,
           });
@@ -264,28 +258,29 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
 
     case 'voice.producer_pause':
     case 'voice.producer_resume': {
-      const producerId = data['producer_id'] as string;
-      if (producerId) {
+      const pauseResult = voiceProducerIdSchema.safeParse(msg.data);
+      if (pauseResult.success) {
         if (msg.event === 'voice.producer_pause') {
-          voiceManager.pauseProducer(producerId);
+          voiceManager.pauseProducer(pauseResult.data.producer_id);
         } else {
-          voiceManager.resumeProducer(producerId);
+          voiceManager.resumeProducer(pauseResult.data.producer_id);
         }
       }
       break;
     }
 
     case 'voice.consumer_resume': {
-      const consumerId = data['consumer_id'] as string;
-      if (consumerId) {
-        await voiceManager.resumeConsumer(consumerId);
+      const resumeResult = voiceConsumerIdSchema.safeParse(msg.data);
+      if (resumeResult.success) {
+        await voiceManager.resumeConsumer(resumeResult.data.consumer_id);
       }
       break;
     }
 
     case 'voice.mute': {
-      const selfMute = data['self_mute'] as boolean | undefined;
-      const selfDeaf = data['self_deaf'] as boolean | undefined;
+      const muteResult = voiceMuteSchema.safeParse(msg.data);
+      if (!muteResult.success) break;
+      const { self_mute: selfMute, self_deaf: selfDeaf } = muteResult.data;
 
       voiceStateManager.updateMute(session.userId, { selfMute, selfDeaf });
 
@@ -308,11 +303,10 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
     }
 
     case 'voice.set_quality': {
-      const consumerId = data['consumer_id'] as string;
-      const spatialLayer = data['spatial_layer'] as number | undefined;
-      const temporalLayer = data['temporal_layer'] as number | undefined;
-      if (consumerId) {
-        await voiceManager.setConsumerQuality(consumerId, spatialLayer, temporalLayer);
+      const qualityResult = voiceQualitySchema.safeParse(msg.data);
+      if (qualityResult.success) {
+        const { consumer_id, spatial_layer, temporal_layer } = qualityResult.data;
+        await voiceManager.setConsumerQuality(consumer_id, spatial_layer, temporal_layer);
       }
       break;
     }

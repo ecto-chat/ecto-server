@@ -8,27 +8,19 @@ import { requirePermission, requireMember, buildPermissionContext } from '../../
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { resolveUserProfiles } from '../../utils/resolve-profile.js';
+import { eventDispatcher } from '../../ws/event-dispatcher.js';
+import { presenceManager } from '../../services/presence.js';
+import { cleanupVoiceState } from '../../utils/voice-cleanup.js';
 import { voiceStateManager } from '../../services/voice-state.js';
 import { formatVoiceState } from '../../utils/format.js';
-import { eventDispatcher } from '../../ws/event-dispatcher.js';
-import { voiceManager } from '../../voice/index.js';
-import { presenceManager } from '../../services/presence.js';
 
 /** Clean up voice, presence, and WS sessions for a user being removed from the server */
 function cleanupAndDisconnect(userId: string, closeCode: number, reason: string) {
   // Voice cleanup (must happen before removeSession)
-  const voiceState = voiceStateManager.getByUser(userId);
-  if (voiceState) {
-    voiceStateManager.leave(userId);
-    voiceManager.leaveChannel(userId).catch(() => {});
-    eventDispatcher.dispatchToAll('voice.state_update', {
-      ...formatVoiceState(voiceState),
-      _removed: true,
-    });
-  }
+  cleanupVoiceState(userId);
 
-  // Presence cleanup
-  presenceManager.update(userId, 'offline', null);
+  // Presence cleanup — remove entry entirely (offline status is broadcast below)
+  presenceManager.remove(userId);
   eventDispatcher.dispatchToAll('presence.update', {
     user_id: userId,
     status: 'offline',
@@ -168,18 +160,22 @@ export const membersRouter = router({
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.KICK_MEMBERS);
       await checkHierarchy(ctx.db, ctx.serverId, ctx.user.id, input.user_id);
 
-      const target = await requireMember(ctx.db, ctx.serverId, input.user_id);
-      await ctx.db.delete(members).where(eq(members.id, target.id));
+      const d = ctx.db;
+      await d.transaction(async (tx) => {
+        const target = await requireMember(tx, ctx.serverId, input.user_id);
+        await tx.delete(members).where(eq(members.id, target.id));
 
-      await insertAuditLog(ctx.db, {
-        serverId: ctx.serverId,
-        actorId: ctx.user.id,
-        action: 'member.kick',
-        targetType: 'member',
-        targetId: input.user_id,
-        details: { reason: input.reason },
+        await insertAuditLog(tx, {
+          serverId: ctx.serverId,
+          actorId: ctx.user.id,
+          action: 'member.kick',
+          targetType: 'member',
+          targetId: input.user_id,
+          details: { reason: input.reason },
+        });
       });
 
+      // Broadcast and cleanup after transaction commits
       eventDispatcher.dispatchToAll('member.leave', { user_id: input.user_id });
       cleanupAndDisconnect(input.user_id, 4003, 'Kicked');
       return { success: true };
@@ -198,52 +194,55 @@ export const membersRouter = router({
       await checkHierarchy(ctx.db, ctx.serverId, ctx.user.id, input.user_id);
       const d = ctx.db;
 
-      // Insert ban
-      await d.insert(bans).values({
-        id: generateUUIDv7(),
-        serverId: ctx.serverId,
-        userId: input.user_id,
-        bannedBy: ctx.user.id,
-        reason: input.reason ?? null,
-      });
+      await d.transaction(async (tx) => {
+        // Insert ban
+        await tx.insert(bans).values({
+          id: generateUUIDv7(),
+          serverId: ctx.serverId,
+          userId: input.user_id,
+          bannedBy: ctx.user.id,
+          reason: input.reason ?? null,
+        });
 
-      // Soft-delete recent messages if requested
-      if (input.delete_messages) {
-        const since: Record<string, number> = { '1h': 3600000, '24h': 86400000, '7d': 604800000 };
-        const ms = since[input.delete_messages] ?? 0;
-        if (ms > 0) {
-          const cutoff = new Date(Date.now() - ms);
-          await d
-            .update(messages)
-            .set({ deleted: true })
-            .where(
-              and(
-                eq(messages.authorId, input.user_id),
-                sql`${messages.createdAt} > ${cutoff}`,
-              ),
-            );
+        // Soft-delete recent messages if requested
+        if (input.delete_messages) {
+          const since: Record<string, number> = { '1h': 3600000, '24h': 86400000, '7d': 604800000 };
+          const ms = since[input.delete_messages] ?? 0;
+          if (ms > 0) {
+            const cutoff = new Date(Date.now() - ms);
+            await tx
+              .update(messages)
+              .set({ deleted: true })
+              .where(
+                and(
+                  eq(messages.authorId, input.user_id),
+                  sql`${messages.createdAt} > ${cutoff}`,
+                ),
+              );
+          }
         }
-      }
 
-      // Remove member
-      const [target] = await d
-        .select({ id: members.id })
-        .from(members)
-        .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, input.user_id)))
-        .limit(1);
-      if (target) {
-        await d.delete(members).where(eq(members.id, target.id));
-      }
+        // Remove member
+        const [target] = await tx
+          .select({ id: members.id })
+          .from(members)
+          .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, input.user_id)))
+          .limit(1);
+        if (target) {
+          await tx.delete(members).where(eq(members.id, target.id));
+        }
 
-      await insertAuditLog(d, {
-        serverId: ctx.serverId,
-        actorId: ctx.user.id,
-        action: 'member.ban',
-        targetType: 'member',
-        targetId: input.user_id,
-        details: { reason: input.reason, delete_messages: input.delete_messages },
+        await insertAuditLog(tx, {
+          serverId: ctx.serverId,
+          actorId: ctx.user.id,
+          action: 'member.ban',
+          targetType: 'member',
+          targetId: input.user_id,
+          details: { reason: input.reason, delete_messages: input.delete_messages },
+        });
       });
 
+      // Broadcast and cleanup after transaction commits
       eventDispatcher.dispatchToAll('member.leave', { user_id: input.user_id });
       cleanupAndDisconnect(input.user_id, 4003, 'Banned');
       return { success: true };

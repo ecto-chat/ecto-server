@@ -12,6 +12,8 @@ import { readStateRouter } from './routers/read-state.js';
 import { auditLogRouter } from './routers/audit-log.js';
 import { serverConfigRouter } from './routers/server-config.js';
 import { serverDmsRouter } from './routers/server-dms.js';
+import { webhooksRouter } from './routers/webhooks.js';
+import { searchRouter } from './routers/search.js';
 
 export { router, publicProcedure, protectedProcedure };
 
@@ -29,6 +31,8 @@ export const appRouter = router({
   auditlog: auditLogRouter,
   serverConfig: serverConfigRouter,
   serverDms: serverDmsRouter,
+  webhooks: webhooksRouter,
+  search: searchRouter,
 });
 
 export type AppRouter = typeof appRouter;

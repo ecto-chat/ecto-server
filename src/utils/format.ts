@@ -171,6 +171,7 @@ export function formatMessage(
     mentionEveryone: boolean;
     mentionRoles: string[] | null;
     mentionUsers: string[] | null;
+    webhookId?: string | null;
     editedAt: Date | null;
     createdAt: Date;
   },
@@ -193,6 +194,7 @@ export function formatMessage(
     created_at: row.createdAt.toISOString(),
     attachments: messageAttachments,
     reactions,
+    webhook_id: row.webhookId ?? null,
   };
 }
 

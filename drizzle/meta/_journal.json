@@ -15,6 +15,13 @@
       "when": 1771084800000,
       "tag": "0001_drop_local_users_username_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1771200000000,
+      "tag": "0002_add_message_search_vector",
+      "breakpoints": true
     }
   ]
 }

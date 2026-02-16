@@ -4,7 +4,7 @@ import { channels, categories, channelPermissionOverrides } from '../../db/schem
 import { eq, and, max } from 'drizzle-orm';
 import { generateUUIDv7, Permissions, computePermissions, hasPermission } from 'ecto-shared';
 import { formatChannel, formatCategory } from '../../utils/format.js';
-import { requirePermission, requireMember, buildPermissionContext } from '../../utils/permission-context.js';
+import { requirePermission, requireMember, buildBatchPermissionContext } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
@@ -19,15 +19,14 @@ export const channelsRouter = router({
       d.select().from(categories).where(eq(categories.serverId, ctx.serverId)),
     ]);
 
-    // Filter channels by READ_MESSAGES permission
-    const visibleChannels: typeof allChannels = [];
-    for (const ch of allChannels) {
-      const permCtx = await buildPermissionContext(d, ctx.serverId, ctx.user.id, ch.id);
-      const effective = computePermissions(permCtx);
-      if (hasPermission(effective, Permissions.READ_MESSAGES)) {
-        visibleChannels.push(ch);
-      }
-    }
+    // Filter channels by READ_MESSAGES permission (batch — 4 queries total)
+    const channelIds = allChannels.map((ch) => ch.id);
+    const permCtxMap = await buildBatchPermissionContext(d, ctx.serverId, ctx.user.id, channelIds);
+    const visibleChannels = allChannels.filter((ch) => {
+      const permCtx = permCtxMap.get(ch.id);
+      if (!permCtx) return false;
+      return hasPermission(computePermissions(permCtx), Permissions.READ_MESSAGES);
+    });
 
     // Group by category
     const categoryMap = new Map(allCategories.map((c) => [c.id, { ...formatCategory(c), channels: [] as ReturnType<typeof formatChannel>[] }]));
@@ -69,49 +68,52 @@ export const channelsRouter = router({
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_CHANNELS);
       const d = ctx.db;
 
-      // Get next position
-      const [maxPos] = await d
-        .select({ maxPosition: max(channels.position) })
-        .from(channels)
-        .where(eq(channels.serverId, ctx.serverId));
-      const position = (maxPos?.maxPosition ?? -1) + 1;
+      const formatted = await d.transaction(async (tx) => {
+        // Get next position
+        const [maxPos] = await tx
+          .select({ maxPosition: max(channels.position) })
+          .from(channels)
+          .where(eq(channels.serverId, ctx.serverId));
+        const position = (maxPos?.maxPosition ?? -1) + 1;
 
-      const id = generateUUIDv7();
-      await d.insert(channels).values({
-        id,
-        serverId: ctx.serverId,
-        categoryId: input.category_id ?? null,
-        name: input.name,
-        type: input.type,
-        topic: input.topic ?? null,
-        position,
+        const id = generateUUIDv7();
+        await tx.insert(channels).values({
+          id,
+          serverId: ctx.serverId,
+          categoryId: input.category_id ?? null,
+          name: input.name,
+          type: input.type,
+          topic: input.topic ?? null,
+          position,
+        });
+
+        // Insert permission overrides
+        if (input.permission_overrides?.length) {
+          await tx.insert(channelPermissionOverrides).values(
+            input.permission_overrides.map((o) => ({
+              id: generateUUIDv7(),
+              channelId: id,
+              targetType: o.target_type,
+              targetId: o.target_id,
+              allow: o.allow,
+              deny: o.deny,
+            })),
+          );
+        }
+
+        await insertAuditLog(tx, {
+          serverId: ctx.serverId,
+          actorId: ctx.user.id,
+          action: 'channel.create',
+          targetType: 'channel',
+          targetId: id,
+          details: { name: input.name, type: input.type },
+        });
+
+        const [row] = await tx.select().from(channels).where(eq(channels.id, id)).limit(1);
+        return formatChannel(row!);
       });
 
-      // Insert permission overrides
-      if (input.permission_overrides?.length) {
-        await d.insert(channelPermissionOverrides).values(
-          input.permission_overrides.map((o) => ({
-            id: generateUUIDv7(),
-            channelId: id,
-            targetType: o.target_type,
-            targetId: o.target_id,
-            allow: o.allow,
-            deny: o.deny,
-          })),
-        );
-      }
-
-      await insertAuditLog(d, {
-        serverId: ctx.serverId,
-        actorId: ctx.user.id,
-        action: 'channel.create',
-        targetType: 'channel',
-        targetId: id,
-        details: { name: input.name, type: input.type },
-      });
-
-      const [row] = await d.select().from(channels).where(eq(channels.id, id)).limit(1);
-      const formatted = formatChannel(row!);
       eventDispatcher.dispatchToAll('channel.create', formatted);
       return formatted;
     }),
@@ -152,36 +154,39 @@ export const channelsRouter = router({
       if (input.topic !== undefined) updates['topic'] = input.topic;
       if (input.category_id !== undefined) updates['categoryId'] = input.category_id;
 
-      await d.update(channels).set(updates).where(eq(channels.id, input.channel_id));
+      const updatedFormatted = await d.transaction(async (tx) => {
+        await tx.update(channels).set(updates).where(eq(channels.id, input.channel_id));
 
-      // Replace overrides if provided
-      if (input.permission_overrides) {
-        await d.delete(channelPermissionOverrides).where(eq(channelPermissionOverrides.channelId, input.channel_id));
-        if (input.permission_overrides.length > 0) {
-          await d.insert(channelPermissionOverrides).values(
-            input.permission_overrides.map((o) => ({
-              id: generateUUIDv7(),
-              channelId: input.channel_id,
-              targetType: o.target_type,
-              targetId: o.target_id,
-              allow: o.allow,
-              deny: o.deny,
-            })),
-          );
+        // Replace overrides if provided
+        if (input.permission_overrides) {
+          await tx.delete(channelPermissionOverrides).where(eq(channelPermissionOverrides.channelId, input.channel_id));
+          if (input.permission_overrides.length > 0) {
+            await tx.insert(channelPermissionOverrides).values(
+              input.permission_overrides.map((o) => ({
+                id: generateUUIDv7(),
+                channelId: input.channel_id,
+                targetType: o.target_type,
+                targetId: o.target_id,
+                allow: o.allow,
+                deny: o.deny,
+              })),
+            );
+          }
         }
-      }
 
-      await insertAuditLog(d, {
-        serverId: ctx.serverId,
-        actorId: ctx.user.id,
-        action: 'channel.update',
-        targetType: 'channel',
-        targetId: input.channel_id,
-        details: { name: input.name, topic: input.topic },
+        await insertAuditLog(tx, {
+          serverId: ctx.serverId,
+          actorId: ctx.user.id,
+          action: 'channel.update',
+          targetType: 'channel',
+          targetId: input.channel_id,
+          details: { name: input.name, topic: input.topic },
+        });
+
+        const [updated] = await tx.select().from(channels).where(eq(channels.id, input.channel_id)).limit(1);
+        return formatChannel(updated!);
       });
 
-      const [updated] = await d.select().from(channels).where(eq(channels.id, input.channel_id)).limit(1);
-      const updatedFormatted = formatChannel(updated!);
       eventDispatcher.dispatchToAll('channel.update', updatedFormatted);
       return updatedFormatted;
     }),

@@ -99,6 +99,93 @@ export async function buildPermissionContext(
   return ctx;
 }
 
+/**
+ * Build permission contexts for ALL channels in a server at once.
+ * Uses 4 queries total instead of 4-6 per channel.
+ */
+export async function buildBatchPermissionContext(
+  d: Db,
+  serverId: string,
+  userId: string,
+  channelIds: string[],
+): Promise<Map<string, PermissionContext>> {
+  // 1. Get server owner
+  const [server] = await d
+    .select({ adminUserId: servers.adminUserId })
+    .from(servers)
+    .where(eq(servers.id, serverId))
+    .limit(1);
+  const isOwner = server?.adminUserId === userId;
+
+  // 2. Get member
+  const [member] = await d
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.serverId, serverId), eq(members.userId, userId)))
+    .limit(1);
+
+  if (!member) {
+    // Not a member — no permissions for any channel
+    const empty: PermissionContext = { isOwner: false, everyonePermissions: 0, rolePermissions: [] };
+    return new Map(channelIds.map((id) => [id, empty]));
+  }
+
+  // 3. Get all roles + member role assignments in parallel
+  const [allRoles, memberRoleRows, allOverrides] = await Promise.all([
+    d.select().from(roles).where(eq(roles.serverId, serverId)),
+    d.select({ roleId: memberRoles.roleId }).from(memberRoles).where(eq(memberRoles.memberId, member.id)),
+    channelIds.length > 0
+      ? d.select().from(channelPermissionOverrides).where(inArray(channelPermissionOverrides.channelId, channelIds))
+      : Promise.resolve([]),
+  ]);
+
+  const everyoneRole = allRoles.find((r) => r.isDefault);
+  const everyonePermissions = everyoneRole?.permissions ?? 0;
+
+  const memberRoleIds = new Set(memberRoleRows.map((r) => r.roleId));
+  const rolePermissions = allRoles
+    .filter((r) => memberRoleIds.has(r.id) && !r.isDefault)
+    .map((r) => r.permissions);
+
+  // Group overrides by channel
+  const overridesByChannel = new Map<string, typeof allOverrides>();
+  for (const o of allOverrides) {
+    const arr = overridesByChannel.get(o.channelId) ?? [];
+    arr.push(o);
+    overridesByChannel.set(o.channelId, arr);
+  }
+
+  // 4. Build per-channel contexts
+  const result = new Map<string, PermissionContext>();
+  for (const channelId of channelIds) {
+    const ctx: PermissionContext = { isOwner, everyonePermissions, rolePermissions };
+    const overrides = overridesByChannel.get(channelId) ?? [];
+
+    const everyoneOverride = everyoneRole
+      ? overrides.find((o) => o.targetType === 'role' && o.targetId === everyoneRole.id)
+      : undefined;
+    if (everyoneOverride) {
+      ctx.everyoneOverride = { allow: everyoneOverride.allow, deny: everyoneOverride.deny };
+    }
+
+    const roleOvr = overrides
+      .filter((o) => o.targetType === 'role' && memberRoleIds.has(o.targetId))
+      .map((o) => ({ allow: o.allow, deny: o.deny }));
+    if (roleOvr.length > 0) {
+      ctx.roleOverrides = roleOvr;
+    }
+
+    const memberOverride = overrides.find((o) => o.targetType === 'member' && o.targetId === userId);
+    if (memberOverride) {
+      ctx.memberOverride = { allow: memberOverride.allow, deny: memberOverride.deny };
+    }
+
+    result.set(channelId, ctx);
+  }
+
+  return result;
+}
+
 export async function requirePermission(
   d: Db,
   serverId: string,

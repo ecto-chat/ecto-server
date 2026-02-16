@@ -6,6 +6,7 @@ import { createContext } from '../trpc/context.js';
 import { handleFileUpload } from './file-upload.js';
 import { handleIconUpload } from './icon-upload.js';
 import { handleFileServe } from './file-serve.js';
+import { handleWebhookExecute } from './webhook-execute.js';
 import { setupMainWebSocket } from '../ws/main-ws.js';
 import { setupNotifyWebSocket } from '../ws/notify-ws.js';
 
@@ -52,6 +53,12 @@ export async function createServer(_config: Config) {
     // File serving
     if (url.pathname.startsWith('/files/')) {
       await handleFileServe(req, res);
+      return;
+    }
+
+    // Webhook execution
+    if (url.pathname.startsWith('/webhooks/') && req.method === 'POST') {
+      await handleWebhookExecute(req, res, url);
       return;
     }
 

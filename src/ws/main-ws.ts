@@ -23,7 +23,8 @@ import { requirePermission, buildPermissionContext } from '../utils/permission-c
 import { computePermissions, hasPermission, Permissions } from 'ecto-shared';
 import { rateLimiter } from '../middleware/rate-limit.js';
 import { handleVoiceMessage } from './handlers/voice.js';
-import { voiceManager } from '../voice/index.js';
+import { cleanupVoiceState } from '../utils/voice-cleanup.js';
+import { wsMessageSchema, identifySchema, resumeSchema, channelSubSchema, typingSchema, presenceSchema } from './schemas.js';
 
 const HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL + 5000;
 
@@ -57,13 +58,12 @@ export function setupMainWebSocket(): WebSocketServer {
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
     ws.on('message', async (raw) => {
-      let msg: WsMessage;
-      try {
-        msg = JSON.parse(raw.toString()) as WsMessage;
-      } catch {
+      const parsed = wsMessageSchema.safeParse((() => { try { return JSON.parse(raw.toString()); } catch { return null; } })());
+      if (!parsed.success) {
         ws.close(WsCloseCode.INVALID_PAYLOAD, 'Invalid JSON');
         return;
       }
+      const msg = parsed.data;
 
       if (msg.event === 'system.identify') {
         if (authenticated) {
@@ -71,11 +71,12 @@ export function setupMainWebSocket(): WebSocketServer {
           return;
         }
 
-        const payload = msg.data as { token: string; protocol_version?: number };
-        if (!payload?.token) {
-          ws.close(WsCloseCode.AUTHENTICATION_FAILED, 'No token');
+        const identifyResult = identifySchema.safeParse(msg.data);
+        if (!identifyResult.success) {
+          ws.close(WsCloseCode.AUTHENTICATION_FAILED, 'Invalid identify payload');
           return;
         }
+        const payload = identifyResult.data;
 
         if (payload.protocol_version && payload.protocol_version !== PROTOCOL_VERSION) {
           ws.close(WsCloseCode.PROTOCOL_VERSION_MISMATCH, 'Protocol version mismatch');
@@ -191,7 +192,9 @@ export function setupMainWebSocket(): WebSocketServer {
         }
 
         case 'system.resume': {
-          const resumePayload = msg.data as { session_id: string; last_seq: number };
+          const resumeResult = resumeSchema.safeParse(msg.data);
+          if (!resumeResult.success) break;
+          const resumePayload = resumeResult.data;
           const buffered = eventDispatcher.getEventBuffer(sessionId, resumePayload.last_seq);
           for (const entry of buffered) {
             ws.send(JSON.stringify({ event: entry.event, data: entry.data, seq: entry.seq }));
@@ -201,8 +204,9 @@ export function setupMainWebSocket(): WebSocketServer {
         }
 
         case 'subscribe': {
-          const subData = msg.data as { channel_id: string };
-          if (subData?.channel_id) {
+          const subResult = channelSubSchema.safeParse(msg.data);
+          if (subResult.success) {
+            const subData = subResult.data;
             try {
               const d = db();
               const permCtx = await buildPermissionContext(d, (await d.select().from(servers).limit(1))[0]!.id, session.userId, subData.channel_id);
@@ -218,17 +222,18 @@ export function setupMainWebSocket(): WebSocketServer {
         }
 
         case 'unsubscribe': {
-          const unsubData = msg.data as { channel_id: string };
-          if (unsubData?.channel_id) {
-            eventDispatcher.unsubscribe(sessionId, unsubData.channel_id);
-            ws.send(JSON.stringify({ event: 'unsubscribed', data: { channel_id: unsubData.channel_id } }));
+          const unsubResult = channelSubSchema.safeParse(msg.data);
+          if (unsubResult.success) {
+            eventDispatcher.unsubscribe(sessionId, unsubResult.data.channel_id);
+            ws.send(JSON.stringify({ event: 'unsubscribed', data: { channel_id: unsubResult.data.channel_id } }));
           }
           break;
         }
 
         case 'typing.start': {
-          const typingData = msg.data as { channel_id: string };
-          if (typingData?.channel_id) {
+          const typingResult = typingSchema.safeParse(msg.data);
+          if (typingResult.success) {
+            const typingData = typingResult.data;
             if (rateLimiter.check(`typing:${session.userId}:${typingData.channel_id}`, 1, 3000)) {
               eventDispatcher.dispatchToChannel(typingData.channel_id, 'typing.start', {
                 channel_id: typingData.channel_id,
@@ -241,10 +246,10 @@ export function setupMainWebSocket(): WebSocketServer {
         }
 
         case 'typing.stop': {
-          const typingData = msg.data as { channel_id: string };
-          if (typingData?.channel_id) {
-            eventDispatcher.dispatchToChannel(typingData.channel_id, 'typing.stop', {
-              channel_id: typingData.channel_id,
+          const stopResult = typingSchema.safeParse(msg.data);
+          if (stopResult.success) {
+            eventDispatcher.dispatchToChannel(stopResult.data.channel_id, 'typing.stop', {
+              channel_id: stopResult.data.channel_id,
               user_id: session.userId,
             });
           }
@@ -252,11 +257,12 @@ export function setupMainWebSocket(): WebSocketServer {
         }
 
         case 'presence.update': {
-          const presData = msg.data as { status: string; custom_text?: string | null };
-          if (presData?.status) {
+          const presResult = presenceSchema.safeParse(msg.data);
+          if (presResult.success) {
+            const presData = presResult.data;
             presenceManager.update(
               session.userId,
-              presData.status as 'online' | 'idle' | 'dnd' | 'offline',
+              presData.status,
               presData.custom_text ?? null,
             );
             eventDispatcher.dispatchToAll('presence.update', {
@@ -286,20 +292,12 @@ export function setupMainWebSocket(): WebSocketServer {
       const session = eventDispatcher.getSession(sessionId);
       if (session) {
         // Clean up voice state only if THIS session owns it
-        const voiceState = voiceStateManager.getByUser(session.userId);
-        if (voiceState && voiceState.sessionId === sessionId) {
-          voiceStateManager.leave(session.userId);
-          voiceManager.leaveChannel(session.userId).catch(() => {});
-          eventDispatcher.dispatchToAll('voice.state_update', {
-            ...formatVoiceState(voiceState),
-            _removed: true,
-          });
-        }
+        cleanupVoiceState(session.userId, sessionId);
 
         // Set offline if no other sessions
         const otherSessions = eventDispatcher.getSessionsByUser(session.userId);
         if (otherSessions.length <= 1) {
-          presenceManager.update(session.userId, 'offline', null);
+          presenceManager.remove(session.userId);
           eventDispatcher.dispatchToAll('presence.update', {
             user_id: session.userId,
             status: 'offline',

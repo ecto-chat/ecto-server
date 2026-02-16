@@ -22,9 +22,7 @@ import { requirePermission, requireMember } from '../../utils/permission-context
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
-import { voiceStateManager } from '../../services/voice-state.js';
-import { voiceManager } from '../../voice/index.js';
-import { formatVoiceState } from '../../utils/format.js';
+import { cleanupVoiceState } from '../../utils/voice-cleanup.js';
 import { signServerToken } from '../../utils/jwt.js';
 import { registerLocal, loginLocal } from './local-auth.js';
 import { resolveUserProfile, resolveUserProfiles } from '../../utils/resolve-profile.js';
@@ -128,7 +126,7 @@ export const serverRouter = router({
     .mutation(async ({ ctx, input }) => {
       const d = ctx.db;
 
-      // 1. Determine identity
+      // 1. Determine identity (before transaction — local auth may need its own writes)
       let userId: string;
       let identityType: 'global' | 'local';
 
@@ -136,7 +134,6 @@ export const serverRouter = router({
         userId = ctx.user.id;
         identityType = ctx.user.identity_type;
       } else if (input?.username && input?.password) {
-        // Local account
         const [sConfig] = await d
           .select()
           .from(serverConfig)
@@ -159,110 +156,121 @@ export const serverRouter = router({
         throw ectoError('UNAUTHORIZED', 1000, 'Authentication required');
       }
 
-      // 2. Check not already a member
-      const [existingMember] = await d
-        .select({ id: members.id })
-        .from(members)
-        .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, userId)))
-        .limit(1);
+      // 2. Everything else in a transaction
+      const result = await d.transaction(async (tx) => {
+        // Check not already a member
+        const [existingMember] = await tx
+          .select({ id: members.id })
+          .from(members)
+          .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, userId)))
+          .limit(1);
 
-      if (existingMember) {
-        // Already a member — re-issue a server token
+        if (existingMember) {
+          const serverToken = await signServerToken({ sub: userId, identity_type: identityType });
+          const profile = await resolveUserProfile(tx, userId, identityType);
+          const memberRoleRows = await tx
+            .select({ roleId: memberRoles.roleId })
+            .from(memberRoles)
+            .where(eq(memberRoles.memberId, existingMember.id));
+          const roleIds = memberRoleRows.map((r) => r.roleId);
+          const [memberRow] = await tx.select().from(members).where(eq(members.id, existingMember.id)).limit(1);
+          const [serverRow] = await tx.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
+
+          return {
+            server_token: serverToken,
+            server: formatServer(serverRow!),
+            member: formatMember(memberRow!, profile, roleIds),
+            isNew: false as const,
+          };
+        }
+
+        // Check not banned
+        const [ban] = await tx
+          .select({ id: bans.id })
+          .from(bans)
+          .where(and(eq(bans.serverId, ctx.serverId), eq(bans.userId, userId)))
+          .limit(1);
+
+        if (ban) throw ectoError('FORBIDDEN', 2003, 'You are banned from this server');
+
+        // Check invite requirement
+        const [sConfig] = await tx
+          .select()
+          .from(serverConfig)
+          .where(eq(serverConfig.serverId, ctx.serverId))
+          .limit(1);
+
+        if (sConfig?.requireInvite) {
+          if (!input?.invite_code) throw ectoError('FORBIDDEN', 2004, 'Invite code required');
+
+          const [invite] = await tx
+            .select()
+            .from(invites)
+            .where(and(eq(invites.serverId, ctx.serverId), eq(invites.code, input.invite_code)))
+            .limit(1);
+
+          if (!invite) throw ectoError('NOT_FOUND', 2004, 'Invalid invite code');
+          if (invite.revoked) throw ectoError('FORBIDDEN', 2004, 'Invite has been revoked');
+          if (invite.expiresAt && invite.expiresAt < new Date()) throw ectoError('FORBIDDEN', 2005, 'Invite has expired');
+          if (invite.maxUses && invite.useCount >= invite.maxUses) throw ectoError('FORBIDDEN', 2006, 'Invite has reached max uses');
+
+          await tx.update(invites).set({ useCount: invite.useCount + 1 }).where(eq(invites.id, invite.id));
+        }
+
+        // If no members exist yet, make this user the server owner
+        const [existingMemberCount] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(members)
+          .where(eq(members.serverId, ctx.serverId));
+
+        if (existingMemberCount && existingMemberCount.count === 0) {
+          await tx
+            .update(servers)
+            .set({ adminUserId: userId })
+            .where(eq(servers.id, ctx.serverId));
+        }
+
+        // Create member
+        const memberId = generateUUIDv7();
+        await tx.insert(members).values({ id: memberId, serverId: ctx.serverId, userId, identityType });
+
+        // Assign @everyone role
+        const [defaultRole] = await tx
+          .select({ id: roles.id })
+          .from(roles)
+          .where(and(eq(roles.serverId, ctx.serverId), eq(roles.isDefault, true)))
+          .limit(1);
+
+        if (defaultRole) {
+          await tx.insert(memberRoles).values({ memberId, roleId: defaultRole.id });
+        }
+
+        // Sign server token
         const serverToken = await signServerToken({ sub: userId, identity_type: identityType });
-        const profile = await resolveUserProfile(d, userId, identityType);
-        const memberRoleRows = await d
-          .select({ roleId: memberRoles.roleId })
-          .from(memberRoles)
-          .where(eq(memberRoles.memberId, existingMember.id));
-        const roleIds = memberRoleRows.map((r) => r.roleId);
-        const [memberRow] = await d.select().from(members).where(eq(members.id, existingMember.id)).limit(1);
-        const [serverRow] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
+
+        // Get member data
+        const [memberRow] = await tx.select().from(members).where(eq(members.id, memberId)).limit(1);
+        const profile = await resolveUserProfile(tx, userId, identityType);
+        const roleIds = defaultRole ? [defaultRole.id] : [];
+        const [serverRow] = await tx.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
 
         return {
           server_token: serverToken,
           server: formatServer(serverRow!),
           member: formatMember(memberRow!, profile, roleIds),
+          isNew: true as const,
         };
+      });
+
+      // Broadcast after transaction commits
+      if (result.isNew) {
+        eventDispatcher.dispatchToAll('member.join', result.member);
       }
-
-      // 3. Check not banned
-      const [ban] = await d
-        .select({ id: bans.id })
-        .from(bans)
-        .where(and(eq(bans.serverId, ctx.serverId), eq(bans.userId, userId)))
-        .limit(1);
-
-      if (ban) throw ectoError('FORBIDDEN', 2003, 'You are banned from this server');
-
-      // 4. Check invite requirement
-      const [sConfig] = await d
-        .select()
-        .from(serverConfig)
-        .where(eq(serverConfig.serverId, ctx.serverId))
-        .limit(1);
-
-      if (sConfig?.requireInvite) {
-        if (!input?.invite_code) throw ectoError('FORBIDDEN', 2004, 'Invite code required');
-
-        const [invite] = await d
-          .select()
-          .from(invites)
-          .where(and(eq(invites.serverId, ctx.serverId), eq(invites.code, input.invite_code)))
-          .limit(1);
-
-        if (!invite) throw ectoError('NOT_FOUND', 2004, 'Invalid invite code');
-        if (invite.revoked) throw ectoError('FORBIDDEN', 2004, 'Invite has been revoked');
-        if (invite.expiresAt && invite.expiresAt < new Date()) throw ectoError('FORBIDDEN', 2005, 'Invite has expired');
-        if (invite.maxUses && invite.useCount >= invite.maxUses) throw ectoError('FORBIDDEN', 2006, 'Invite has reached max uses');
-
-        await d.update(invites).set({ useCount: invite.useCount + 1 }).where(eq(invites.id, invite.id));
-      }
-
-      // 5. If no members exist yet, make this user the server owner
-      const [existingMemberCount] = await d
-        .select({ count: sql<number>`count(*)::int` })
-        .from(members)
-        .where(eq(members.serverId, ctx.serverId));
-
-      if (existingMemberCount && existingMemberCount.count === 0) {
-        await d
-          .update(servers)
-          .set({ adminUserId: userId })
-          .where(eq(servers.id, ctx.serverId));
-      }
-
-      // 6. Create member
-      const memberId = generateUUIDv7();
-      await d.insert(members).values({ id: memberId, serverId: ctx.serverId, userId, identityType });
-
-      // 7. Assign @everyone role
-      const [defaultRole] = await d
-        .select({ id: roles.id })
-        .from(roles)
-        .where(and(eq(roles.serverId, ctx.serverId), eq(roles.isDefault, true)))
-        .limit(1);
-
-      if (defaultRole) {
-        await d.insert(memberRoles).values({ memberId, roleId: defaultRole.id });
-      }
-
-      // 7. Sign server token
-      const serverToken = await signServerToken({ sub: userId, identity_type: identityType });
-
-      // 8. Get member data
-      const [memberRow] = await d.select().from(members).where(eq(members.id, memberId)).limit(1);
-      const profile = await resolveUserProfile(d, userId, identityType);
-      const roleIds = defaultRole ? [defaultRole.id] : [];
-
-      const [serverRow] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
-
-      const memberFormatted = formatMember(memberRow!, profile, roleIds);
-      eventDispatcher.dispatchToAll('member.join', memberFormatted);
 
       return {
-        server_token: serverToken,
-        server: formatServer(serverRow!),
-        member: memberFormatted,
+        server_token: result.server_token,
+        server: result.server,
+        member: result.member,
       };
     }),
 
@@ -282,15 +290,7 @@ export const serverRouter = router({
     const member = await requireMember(d, ctx.serverId, ctx.user.id);
 
     // Clean up voice state before removing member
-    const voiceState = voiceStateManager.getByUser(ctx.user.id);
-    if (voiceState) {
-      voiceStateManager.leave(ctx.user.id);
-      voiceManager.leaveChannel(ctx.user.id).catch(() => {});
-      eventDispatcher.dispatchToAll('voice.state_update', {
-        ...formatVoiceState(voiceState),
-        _removed: true,
-      });
-    }
+    cleanupVoiceState(ctx.user.id);
 
     await d.delete(members).where(eq(members.id, member.id));
     eventDispatcher.dispatchToAll('member.leave', { user_id: ctx.user.id });

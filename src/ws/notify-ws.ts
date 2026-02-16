@@ -122,5 +122,13 @@ export function sendNotification(userId: string, channelId: string, type: string
         data: { channel_id: channelId, ts: Date.now(), type },
       }));
     }
+
+    // Prune stale debounce entries to prevent unbounded growth
+    if (client.debounce.size > 100) {
+      const staleThreshold = now - DEBOUNCE_MS * 2;
+      for (const [chId, ts] of client.debounce) {
+        if (ts < staleThreshold) client.debounce.delete(chId);
+      }
+    }
   }
 }
