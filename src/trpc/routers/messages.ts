@@ -10,6 +10,7 @@ import { ectoError } from '../../utils/errors.js';
 import { resolveUserProfiles } from '../../utils/resolve-profile.js';
 import type { ReactionGroup } from 'ecto-shared';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
+import { sendNotification } from '../../ws/notify-ws.js';
 
 function groupReactions(reactionRows: { emoji: string; userId: string }[], currentUserId: string): ReactionGroup[] {
   const groups = new Map<string, { emoji: string; users: string[] }>();
@@ -159,6 +160,18 @@ export const messagesRouter = router({
               target: [readStates.userId, readStates.channelId],
               set: { mentionCount: sql`${readStates.mentionCount} + 1` },
             });
+          // Send real-time notification (skip self-mentions)
+          if (mentionedUserId !== ctx.user.id) {
+            // Main WS: user-targeted mention event (works even if user is on a different channel)
+            eventDispatcher.dispatchToUser(mentionedUserId, 'mention.create', {
+              channel_id: input.channel_id,
+              message_id: id,
+              author_id: ctx.user.id,
+              content: input.content ?? '',
+            });
+            // Notify WS: for background servers
+            sendNotification(mentionedUserId, input.channel_id, 'mention');
+          }
         }
       }
 

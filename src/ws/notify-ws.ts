@@ -119,7 +119,7 @@ export function sendNotification(userId: string, channelId: string, type: string
     if (client.ws.readyState === client.ws.OPEN) {
       client.ws.send(JSON.stringify({
         event: 'notify',
-        data: { channel_id: channelId, ts: new Date().toISOString(), type },
+        data: { channel_id: channelId, ts: Date.now(), type },
       }));
     }
   }
