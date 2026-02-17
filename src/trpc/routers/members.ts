@@ -1,6 +1,8 @@
 import { z } from 'zod/v4';
+import argon2 from 'argon2';
 import { router, protectedProcedure } from '../init.js';
-import { members, memberRoles, roles, bans, messages, servers } from '../../db/schema/index.js';
+import { members, memberRoles, roles, bans, messages, servers, localUsers } from '../../db/schema/index.js';
+import { signServerToken } from '../../utils/jwt.js';
 import { eq, and, count, ilike, or, lt, desc, inArray, sql } from 'drizzle-orm';
 import { generateUUIDv7, Permissions } from 'ecto-shared';
 import { formatMember } from '../../utils/format.js';
@@ -367,5 +369,45 @@ export const membersRouter = router({
       const member = await requireMember(ctx.db, ctx.serverId, ctx.user.id);
       await ctx.db.update(members).set({ allowDms: input.allow_dms }).where(eq(members.id, member.id));
       return { success: true };
+    }),
+
+  changePassword: protectedProcedure
+    .input(z.object({
+      current_password: z.string(),
+      new_password: z.string().min(8).max(128),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.user.identity_type !== 'local') {
+        throw ectoError('BAD_REQUEST', 2000, 'Password change is only available for local accounts');
+      }
+
+      const [user] = await ctx.db
+        .select()
+        .from(localUsers)
+        .where(eq(localUsers.id, ctx.user.id))
+        .limit(1);
+
+      if (!user) {
+        throw ectoError('NOT_FOUND', 2000, 'Local account not found');
+      }
+
+      const valid = await argon2.verify(user.passwordHash, input.current_password);
+      if (!valid) {
+        throw ectoError('UNAUTHORIZED', 1000, 'Invalid current password');
+      }
+
+      const newHash = await argon2.hash(input.new_password);
+      await ctx.db
+        .update(localUsers)
+        .set({ passwordHash: newHash })
+        .where(eq(localUsers.id, ctx.user.id));
+
+      // Return a fresh token so the client can update stored credentials
+      const newToken = await signServerToken({
+        sub: ctx.user.id,
+        identity_type: 'local',
+      });
+
+      return { success: true, new_token: newToken };
     }),
 });

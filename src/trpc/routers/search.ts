@@ -17,6 +17,7 @@ export const searchRouter = router({
         before: z.string().uuid().optional(),
         after: z.string().uuid().optional(),
         limit: z.number().int().min(1).max(50).optional(),
+        has: z.array(z.enum(['attachment', 'link'])).optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -36,6 +37,12 @@ export const searchRouter = router({
       if (input.author_id) conditions.push(eq(messages.authorId, input.author_id));
       if (input.before) conditions.push(lt(messages.id, input.before));
       if (input.after) conditions.push(gt(messages.id, input.after));
+      if (input.has?.includes('attachment')) {
+        conditions.push(sql`EXISTS (SELECT 1 FROM attachments WHERE attachments.message_id = messages.id)`);
+      }
+      if (input.has?.includes('link')) {
+        conditions.push(like(messages.content, '%http%'));
+      }
 
       let rows: (typeof messages.$inferSelect)[];
 
