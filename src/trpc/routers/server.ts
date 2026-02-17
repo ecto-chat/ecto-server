@@ -311,6 +311,45 @@ export const serverRouter = router({
       return { success: true };
     }),
 
+  transferOwnership: protectedProcedure
+    .input(z.object({
+      new_owner_id: z.string().uuid(),
+      confirmation: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const d = ctx.db;
+      const [server] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
+
+      if (!server) throw ectoError('NOT_FOUND', 2000, 'Server not found');
+      if (server.adminUserId !== ctx.user.id) throw ectoError('FORBIDDEN', 5001, 'Only the server owner can transfer ownership');
+      if (input.confirmation !== server.name) throw ectoError('BAD_REQUEST', 2000, 'Confirmation must match server name');
+
+      // Verify new owner is a member with a global account
+      const [newOwnerMember] = await d
+        .select()
+        .from(members)
+        .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, input.new_owner_id)))
+        .limit(1);
+
+      if (!newOwnerMember) throw ectoError('NOT_FOUND', 2000, 'User is not a member of this server');
+
+      await d.update(servers).set({ adminUserId: input.new_owner_id, updatedAt: new Date() }).where(eq(servers.id, ctx.serverId));
+
+      await insertAuditLog(d, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'server.transfer_ownership',
+        targetType: 'member',
+        targetId: input.new_owner_id,
+        details: { previous_owner: ctx.user.id },
+      });
+
+      const [updated] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
+      const formatted = formatServer(updated!);
+      eventDispatcher.dispatchToAll('server.update', formatted);
+      return { success: true };
+    }),
+
   uploadIcon: protectedProcedure
     .input(z.object({ icon_url: z.string() }))
     .mutation(async ({ ctx, input }) => {

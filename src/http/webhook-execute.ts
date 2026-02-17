@@ -41,6 +41,17 @@ export async function handleWebhookExecute(
   const webhookId = parts[1]!;
   const token = parts[2]!;
 
+  // Read body FIRST — before any async DB work, otherwise the 'data'
+  // event fires while we're awaiting and the body chunks are lost.
+  let body: { content?: string; username?: string; avatar_url?: string };
+  try {
+    const raw = await readBody(req);
+    body = JSON.parse(raw);
+  } catch {
+    jsonResponse(res, 400, { error: 'Invalid JSON body' });
+    return;
+  }
+
   const d = db();
 
   // Look up webhook by id + token
@@ -64,16 +75,6 @@ export async function handleWebhookExecute(
 
   if (!channel) {
     jsonResponse(res, 404, { error: 'Channel not found' });
-    return;
-  }
-
-  // Parse request body
-  let body: { content?: string; username?: string; avatar_url?: string };
-  try {
-    const raw = await readBody(req);
-    body = JSON.parse(raw);
-  } catch {
-    jsonResponse(res, 400, { error: 'Invalid JSON body' });
     return;
   }
 
