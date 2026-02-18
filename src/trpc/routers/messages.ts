@@ -2,9 +2,9 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { messages, attachments, reactions, channels, members, readStates, serverConfig } from '../../db/schema/index.js';
 import { eq, and, lt, gt, desc, asc, inArray, sql } from 'drizzle-orm';
-import { generateUUIDv7, Permissions, parseMentions, MessageType } from 'ecto-shared';
+import { generateUUIDv7, Permissions, parseMentions, MessageType, computePermissions, hasPermission } from 'ecto-shared';
 import { formatMessage, formatAttachment, formatMessageAuthor } from '../../utils/format.js';
-import { requirePermission, requireMember } from '../../utils/permission-context.js';
+import { requirePermission, requireMember, buildPermissionContext } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { resolveUserProfiles } from '../../utils/resolve-profile.js';
@@ -63,13 +63,39 @@ export const messagesRouter = router({
         throw ectoError('BAD_REQUEST', 3001, 'Message must have content or attachments');
       }
 
-      // Block messages to page channels
-      const [ch] = await ctx.db.select({ type: channels.type }).from(channels).where(eq(channels.id, input.channel_id)).limit(1);
+      // Block messages to page channels + fetch slowmode
+      const [ch] = await ctx.db
+        .select({ type: channels.type, slowmodeSeconds: channels.slowmodeSeconds })
+        .from(channels)
+        .where(eq(channels.id, input.channel_id))
+        .limit(1);
       if (ch?.type === 'page') {
         throw ectoError('BAD_REQUEST', 3002, 'Cannot send messages to a page channel');
       }
 
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.SEND_MESSAGES, input.channel_id);
+
+      // Slowmode enforcement
+      if (ch && ch.slowmodeSeconds > 0) {
+        const permCtx = await buildPermissionContext(ctx.db, ctx.serverId, ctx.user.id, input.channel_id);
+        const effective = computePermissions(permCtx);
+        const canBypass = hasPermission(effective, Permissions.MANAGE_MESSAGES) || hasPermission(effective, Permissions.MANAGE_CHANNELS);
+        if (!canBypass) {
+          const [lastMsg] = await ctx.db
+            .select({ createdAt: messages.createdAt })
+            .from(messages)
+            .where(and(eq(messages.channelId, input.channel_id), eq(messages.authorId, ctx.user.id), eq(messages.deleted, false)))
+            .orderBy(desc(messages.createdAt))
+            .limit(1);
+          if (lastMsg) {
+            const elapsed = (Date.now() - lastMsg.createdAt.getTime()) / 1000;
+            if (elapsed < ch.slowmodeSeconds) {
+              const retryAfter = Math.ceil(ch.slowmodeSeconds - elapsed);
+              throw ectoError('TOO_MANY_REQUESTS', 3004, `Slowmode active. Try again in ${retryAfter}s`);
+            }
+          }
+        }
+      }
       if (input.attachment_ids?.length) {
         await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.ATTACH_FILES, input.channel_id);
       }

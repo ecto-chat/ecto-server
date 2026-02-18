@@ -19,7 +19,7 @@ import { formatServer, formatChannel, formatCategory, formatRole, formatMember, 
 import { resolveUserProfiles } from '../utils/resolve-profile.js';
 import { presenceManager } from '../services/presence.js';
 import { voiceStateManager } from '../services/voice-state.js';
-import { requirePermission, buildPermissionContext } from '../utils/permission-context.js';
+import { requirePermission, buildPermissionContext, buildBatchPermissionContext } from '../utils/permission-context.js';
 import { computePermissions, hasPermission, Permissions } from 'ecto-shared';
 import { rateLimiter } from '../middleware/rate-limit.js';
 import { handleVoiceMessage } from './handlers/voice.js';
@@ -137,6 +137,25 @@ export function setupMainWebSocket(): WebSocketServer {
           const presences = presenceManager.getAllForMembers(memberUserIds);
           const voiceStates = voiceStateManager.getAllStates();
 
+          // Filter channels by READ_MESSAGES permission
+          const channelIds = allChannels.map((ch) => ch.id);
+          const permCtxMap = await buildBatchPermissionContext(d, server.id, user.id, channelIds);
+          const visibleChannels = allChannels.filter((ch) => {
+            const pCtx = permCtxMap.get(ch.id);
+            if (!pCtx) return false;
+            return hasPermission(computePermissions(pCtx), Permissions.READ_MESSAGES);
+          });
+
+          // Only include categories that have visible channels (or user has MANAGE_CHANNELS)
+          const visibleCategoryIds = new Set(visibleChannels.map((ch) => ch.categoryId).filter(Boolean));
+          const serverPermCtx = permCtxMap.values().next().value;
+          const userHasManageChannels = serverPermCtx
+            ? hasPermission(computePermissions({ isOwner: serverPermCtx.isOwner, everyonePermissions: serverPermCtx.everyonePermissions, rolePermissions: serverPermCtx.rolePermissions }), Permissions.MANAGE_CHANNELS)
+            : false;
+          const visibleCategories = allCategories.filter((cat) =>
+            visibleCategoryIds.has(cat.id) || userHasManageChannels,
+          );
+
           const ready: WsMessage = {
             event: 'system.ready',
             data: {
@@ -144,8 +163,11 @@ export function setupMainWebSocket(): WebSocketServer {
               user_id: user.id,
               protocol_version: PROTOCOL_VERSION,
               server: formatServer(server, srvConfig),
-              channels: allChannels.map(formatChannel),
-              categories: allCategories.map(formatCategory),
+              channels: visibleChannels.map((ch) => {
+                const pCtx = permCtxMap.get(ch.id);
+                return formatChannel(ch, pCtx ? computePermissions(pCtx) : 0);
+              }),
+              categories: visibleCategories.map(formatCategory),
               roles: allRoles.map(formatRole),
               members: memberRows.map((m) => {
                 const profile = profiles.get(m.userId) ?? { username: 'Unknown', display_name: null, avatar_url: null };

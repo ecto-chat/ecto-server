@@ -58,7 +58,9 @@ export function formatChannel(row: {
   type: string;
   topic: string | null;
   position: number;
-}): Channel {
+  slowmodeSeconds: number;
+  nsfw: boolean;
+}, myPermissions?: number): Channel {
   return {
     id: row.id,
     server_id: row.serverId,
@@ -67,6 +69,9 @@ export function formatChannel(row: {
     type: row.type as 'text' | 'voice' | 'page',
     topic: row.topic,
     position: row.position,
+    slowmode_seconds: row.slowmodeSeconds,
+    nsfw: row.nsfw,
+    ...(myPermissions !== undefined && { my_permissions: myPermissions }),
   };
 }
 

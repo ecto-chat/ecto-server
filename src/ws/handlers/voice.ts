@@ -196,6 +196,32 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       const produceResult = voiceProduceSchema.safeParse(msg.data);
       if (produceResult.success) {
         const { transport_id: transportId, kind, rtp_parameters: rtpParameters, source } = produceResult.data;
+
+        // Check media-type permissions
+        const voiceState = voiceStateManager.getByUser(session.userId);
+        if (voiceState) {
+          const d = db();
+          const [server] = await d.select().from(servers).limit(1);
+          if (server) {
+            const permCtx = await buildPermissionContext(d, server.id, session.userId, voiceState.channelId);
+            const perms = computePermissions(permCtx);
+            const resolvedSource = source ?? (kind === 'audio' ? 'mic' : 'camera');
+
+            if (resolvedSource === 'screen' || resolvedSource === 'screen-audio') {
+              if (!hasPermission(perms, Permissions.SCREEN_SHARE)) {
+                session.ws.send(JSON.stringify({ event: 'voice.error', data: { code: 5001, message: 'You do not have permission to screen share' } }));
+                break;
+              }
+            } else if (kind === 'audio' && !hasPermission(perms, Permissions.SPEAK_VOICE)) {
+              session.ws.send(JSON.stringify({ event: 'voice.error', data: { code: 5001, message: 'You do not have permission to speak' } }));
+              break;
+            } else if (kind === 'video' && !hasPermission(perms, Permissions.USE_VIDEO)) {
+              session.ws.send(JSON.stringify({ event: 'voice.error', data: { code: 5001, message: 'You do not have permission to use video' } }));
+              break;
+            }
+          }
+        }
+
         try {
           const producer = await voiceManager.createProducer(transportId, kind, rtpParameters, source);
           session.ws.send(JSON.stringify({

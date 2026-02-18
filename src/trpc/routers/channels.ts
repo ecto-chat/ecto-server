@@ -28,12 +28,20 @@ export const channelsRouter = router({
       return hasPermission(computePermissions(permCtx), Permissions.READ_MESSAGES);
     });
 
+    // Check if user has MANAGE_CHANNELS (admins see all categories)
+    const userPermCtx = permCtxMap.values().next().value;
+    const hasManageChannels = userPermCtx
+      ? hasPermission(computePermissions({ isOwner: userPermCtx.isOwner, everyonePermissions: userPermCtx.everyonePermissions, rolePermissions: userPermCtx.rolePermissions }), Permissions.MANAGE_CHANNELS)
+      : false;
+
     // Group by category
     const categoryMap = new Map(allCategories.map((c) => [c.id, { ...formatCategory(c), channels: [] as ReturnType<typeof formatChannel>[] }]));
     const uncategorized: ReturnType<typeof formatChannel>[] = [];
 
     for (const ch of visibleChannels.sort((a, b) => a.position - b.position)) {
-      const formatted = formatChannel(ch);
+      const permCtx = permCtxMap.get(ch.id);
+      const myPerms = permCtx ? computePermissions(permCtx) : 0;
+      const formatted = formatChannel(ch, myPerms);
       if (ch.categoryId && categoryMap.has(ch.categoryId)) {
         categoryMap.get(ch.categoryId)!.channels.push(formatted);
       } else {
@@ -41,7 +49,10 @@ export const channelsRouter = router({
       }
     }
 
-    const sortedCategories = [...categoryMap.values()].sort((a, b) => a.position - b.position);
+    // Only return categories that have visible channels (or user has MANAGE_CHANNELS)
+    const sortedCategories = [...categoryMap.values()]
+      .filter((c) => c.channels.length > 0 || hasManageChannels)
+      .sort((a, b) => a.position - b.position);
     return { categories: sortedCategories, uncategorized };
   }),
 
@@ -52,6 +63,8 @@ export const channelsRouter = router({
         type: z.enum(['text', 'voice', 'page']),
         category_id: z.string().uuid().optional(),
         topic: z.string().max(1024).optional(),
+        slowmode_seconds: z.number().int().min(0).max(3600).optional(),
+        nsfw: z.boolean().optional(),
         permission_overrides: z
           .array(
             z.object({
@@ -85,6 +98,8 @@ export const channelsRouter = router({
           type: input.type,
           topic: input.topic ?? null,
           position,
+          slowmodeSeconds: input.slowmode_seconds ?? 0,
+          nsfw: input.nsfw ?? false,
         });
 
         // Insert blank page content for page channels
@@ -136,6 +151,8 @@ export const channelsRouter = router({
         name: z.string().min(1).max(100).optional(),
         topic: z.string().max(1024).optional(),
         category_id: z.string().uuid().optional(),
+        slowmode_seconds: z.number().int().min(0).max(3600).optional(),
+        nsfw: z.boolean().optional(),
         permission_overrides: z
           .array(
             z.object({
@@ -164,6 +181,8 @@ export const channelsRouter = router({
       if (input.name !== undefined) updates['name'] = input.name;
       if (input.topic !== undefined) updates['topic'] = input.topic;
       if (input.category_id !== undefined) updates['categoryId'] = input.category_id;
+      if (input.slowmode_seconds !== undefined) updates['slowmodeSeconds'] = input.slowmode_seconds;
+      if (input.nsfw !== undefined) updates['nsfw'] = input.nsfw;
 
       const updatedFormatted = await d.transaction(async (tx) => {
         await tx.update(channels).set(updates).where(eq(channels.id, input.channel_id));
@@ -199,6 +218,9 @@ export const channelsRouter = router({
       });
 
       eventDispatcher.dispatchToAll('channel.update', updatedFormatted);
+      if (input.permission_overrides) {
+        eventDispatcher.dispatchToAll('permissions.update', { type: 'channel', id: input.channel_id });
+      }
       return updatedFormatted;
     }),
 
@@ -228,6 +250,24 @@ export const channelsRouter = router({
 
       eventDispatcher.dispatchToAll('channel.delete', { id: input.channel_id });
       return { success: true };
+    }),
+
+  getOverrides: protectedProcedure
+    .input(z.object({ channel_id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_CHANNELS);
+      const overrides = await ctx.db
+        .select()
+        .from(channelPermissionOverrides)
+        .where(eq(channelPermissionOverrides.channelId, input.channel_id));
+      return overrides.map((o) => ({
+        id: o.id,
+        channel_id: o.channelId,
+        target_type: o.targetType as 'role' | 'member',
+        target_id: o.targetId,
+        allow: o.allow,
+        deny: o.deny,
+      }));
     }),
 
   reorder: protectedProcedure

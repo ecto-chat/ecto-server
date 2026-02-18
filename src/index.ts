@@ -17,6 +17,8 @@ const DEFAULT_CHANNEL_PERMS =
   Permissions.CONNECT_VOICE |
   Permissions.SPEAK_VOICE |
   Permissions.USE_VOICE_ACTIVITY |
+  Permissions.USE_VIDEO |
+  Permissions.SCREEN_SHARE |
   Permissions.CREATE_INVITES;
 
 async function main() {

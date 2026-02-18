@@ -8,6 +8,7 @@ export { members } from './members.js';
 export { roles } from './roles.js';
 export { memberRoles } from './member-roles.js';
 export { channelPermissionOverrides } from './channel-permission-overrides.js';
+export { categoryPermissionOverrides } from './category-permission-overrides.js';
 export { messages } from './messages.js';
 export { attachments } from './attachments.js';
 export { reactions } from './reactions.js';
