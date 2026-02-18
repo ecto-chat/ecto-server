@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
-import { channels, categories, channelPermissionOverrides } from '../../db/schema/index.js';
+import { channels, categories, channelPermissionOverrides, pageContents } from '../../db/schema/index.js';
 import { eq, and, max } from 'drizzle-orm';
 import { generateUUIDv7, Permissions, computePermissions, hasPermission } from 'ecto-shared';
 import { formatChannel, formatCategory } from '../../utils/format.js';
@@ -49,7 +49,7 @@ export const channelsRouter = router({
     .input(
       z.object({
         name: z.string().min(1).max(100),
-        type: z.enum(['text', 'voice']),
+        type: z.enum(['text', 'voice', 'page']),
         category_id: z.string().uuid().optional(),
         topic: z.string().max(1024).optional(),
         permission_overrides: z
@@ -86,6 +86,17 @@ export const channelsRouter = router({
           topic: input.topic ?? null,
           position,
         });
+
+        // Insert blank page content for page channels
+        if (input.type === 'page') {
+          await tx.insert(pageContents).values({
+            channelId: id,
+            content: '',
+            version: 1,
+            editedBy: null,
+            editedAt: new Date(),
+          });
+        }
 
         // Insert permission overrides
         if (input.permission_overrides?.length) {

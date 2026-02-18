@@ -4,7 +4,7 @@ import type { Config } from '../config/index.js';
 import { appRouter } from '../trpc/router.js';
 import { createContext } from '../trpc/context.js';
 import { handleFileUpload } from './file-upload.js';
-import { handleIconUpload, handleBannerUpload } from './icon-upload.js';
+import { handleIconUpload, handleBannerUpload, handlePageBannerUpload } from './icon-upload.js';
 import { handleFileServe } from './file-serve.js';
 import { handleWebhookExecute } from './webhook-execute.js';
 import { setupMainWebSocket } from '../ws/main-ws.js';
@@ -47,6 +47,12 @@ export async function createServer(_config: Config) {
     // Banner upload
     if (url.pathname === '/upload/banner' && req.method === 'POST') {
       await handleBannerUpload(req, res);
+      return;
+    }
+
+    // Page banner upload
+    if (url.pathname.startsWith('/upload/page-banner/') && req.method === 'POST') {
+      await handlePageBannerUpload(req, res, url.pathname.split('/')[3] ?? '');
       return;
     }
 

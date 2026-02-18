@@ -64,7 +64,7 @@ export function formatChannel(row: {
     server_id: row.serverId,
     category_id: row.categoryId,
     name: row.name,
-    type: row.type as 'text' | 'voice',
+    type: row.type as 'text' | 'voice' | 'page',
     topic: row.topic,
     position: row.position,
   };

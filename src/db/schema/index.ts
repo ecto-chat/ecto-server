@@ -17,3 +17,4 @@ export { bans } from './bans.js';
 export { auditLog } from './audit-log.js';
 export { dmConversations } from './dm-conversations.js';
 export { webhooks } from './webhooks.js';
+export { pageContents, pageRevisions } from './pages.js';

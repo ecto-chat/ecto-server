@@ -62,6 +62,13 @@ export const messagesRouter = router({
       if (!input.content && (!input.attachment_ids || input.attachment_ids.length === 0)) {
         throw ectoError('BAD_REQUEST', 3001, 'Message must have content or attachments');
       }
+
+      // Block messages to page channels
+      const [ch] = await ctx.db.select({ type: channels.type }).from(channels).where(eq(channels.id, input.channel_id)).limit(1);
+      if (ch?.type === 'page') {
+        throw ectoError('BAD_REQUEST', 3002, 'Cannot send messages to a page channel');
+      }
+
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.SEND_MESSAGES, input.channel_id);
       if (input.attachment_ids?.length) {
         await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.ATTACH_FILES, input.channel_id);
