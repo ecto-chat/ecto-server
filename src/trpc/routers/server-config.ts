@@ -24,6 +24,7 @@ export const serverConfigRouter = router({
       allow_local_accounts: cfg.allowLocalAccounts,
       require_invite: cfg.requireInvite,
       allow_member_dms: cfg.allowMemberDms,
+      show_system_messages: cfg.showSystemMessages,
       version: '0.1.0',
     };
   }),
@@ -35,6 +36,7 @@ export const serverConfigRouter = router({
         allow_local_accounts: z.boolean().optional(),
         require_invite: z.boolean().optional(),
         allow_member_dms: z.boolean().optional(),
+        show_system_messages: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -45,6 +47,7 @@ export const serverConfigRouter = router({
       if (input.allow_local_accounts !== undefined) updates['allowLocalAccounts'] = input.allow_local_accounts;
       if (input.require_invite !== undefined) updates['requireInvite'] = input.require_invite;
       if (input.allow_member_dms !== undefined) updates['allowMemberDms'] = input.allow_member_dms;
+      if (input.show_system_messages !== undefined) updates['showSystemMessages'] = input.show_system_messages;
 
       await ctx.db.update(serverConfig).set(updates).where(eq(serverConfig.serverId, ctx.serverId));
 

@@ -12,6 +12,70 @@ import { requirePermission } from '../utils/permission-context.js';
 import { Permissions } from 'ecto-shared';
 import { parseMultipart } from './multipart.js';
 
+export async function handleBannerUpload(req: IncomingMessage, res: ServerResponse) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+
+    const user = await verifyToken(authHeader.slice(7));
+    const d = db();
+    const serverId = getServerId();
+
+    await requirePermission(d, serverId, user.id, Permissions.MANAGE_SERVER);
+
+    const contentType = req.headers['content-type'] ?? '';
+    const boundaryMatch = contentType.match(/boundary=(.+)/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Expected multipart/form-data' }));
+      return;
+    }
+
+    const { file } = await parseMultipart(req, boundaryMatch[1]!);
+    if (!file) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'No file provided' }));
+      return;
+    }
+
+    if (!file.contentType.startsWith('image/')) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'File must be an image' }));
+      return;
+    }
+
+    // Max 800KB for banners
+    if (file.data.length > 800 * 1024) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Banner must be under 800KB' }));
+      return;
+    }
+
+    const bannerId = generateUUIDv7();
+    const ext = path.extname(file.filename) || '.png';
+    const bannerFilename = `banner-${bannerId}${ext}`;
+    const dir = path.join(config.UPLOAD_DIR, serverId, 'banners');
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(path.join(dir, bannerFilename), file.data);
+
+    const baseUrl = `http://${req.headers.host ?? `localhost:${config.PORT}`}`;
+    const bannerUrl = `${baseUrl}/files/${serverId}/banners/${bannerFilename}`;
+
+    await d.update(servers).set({ bannerUrl, updatedAt: new Date() }).where(eq(servers.id, serverId));
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ banner_url: bannerUrl }));
+  } catch (err) {
+    console.error('Banner upload error:', err);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Upload failed' }));
+  }
+}
+
 export async function handleIconUpload(req: IncomingMessage, res: ServerResponse) {
   try {
     const authHeader = req.headers.authorization;

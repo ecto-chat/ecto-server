@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
-import { messages, attachments, reactions, channels, members, readStates } from '../../db/schema/index.js';
+import { messages, attachments, reactions, channels, members, readStates, serverConfig } from '../../db/schema/index.js';
 import { eq, and, lt, gt, desc, asc, inArray, sql } from 'drizzle-orm';
 import { generateUUIDv7, Permissions, parseMentions, MessageType } from 'ecto-shared';
 import { formatMessage, formatAttachment, formatMessageAuthor } from '../../utils/format.js';
@@ -199,16 +199,37 @@ export const messagesRouter = router({
 
       await d.update(messages).set({ pinned: input.pinned }).where(eq(messages.id, input.message_id));
 
-      // Insert system message for pin
+      // Insert and broadcast system message for pin (if enabled)
       if (input.pinned) {
-        await d.insert(messages).values({
-          id: generateUUIDv7(),
-          channelId: msg.channelId,
-          authorId: ctx.user.id,
-          content: null,
-          type: MessageType.PIN_ADDED,
-          replyTo: input.message_id,
-        });
+        const [srvCfg] = await d
+          .select()
+          .from(serverConfig)
+          .where(eq(serverConfig.serverId, ctx.serverId))
+          .limit(1);
+
+        if (srvCfg?.showSystemMessages !== false) {
+          const sysId = generateUUIDv7();
+          await d.insert(messages).values({
+            id: sysId,
+            channelId: msg.channelId,
+            authorId: ctx.user.id,
+            content: null,
+            type: MessageType.PIN_ADDED,
+            replyTo: input.message_id,
+          });
+          const [sysRow] = await d.select().from(messages).where(eq(messages.id, sysId)).limit(1);
+          if (sysRow) {
+            const pinnerProfile = (await resolveUserProfiles(d, [ctx.user.id])).get(ctx.user.id) ?? { username: 'Unknown', display_name: null, avatar_url: null };
+            const [pinnerMember] = await d
+              .select({ nickname: members.nickname })
+              .from(members)
+              .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, ctx.user.id)))
+              .limit(1);
+            const pinnerAuthor = formatMessageAuthor(pinnerProfile, ctx.user.id, pinnerMember?.nickname ?? null);
+            const sysFormatted = formatMessage(sysRow, pinnerAuthor, [], []);
+            eventDispatcher.dispatchToChannel(msg.channelId, 'message.create', sysFormatted);
+          }
+        }
       }
 
       await insertAuditLog(d, {

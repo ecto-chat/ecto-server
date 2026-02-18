@@ -10,14 +10,16 @@ import {
   channels,
   serverConfig,
   dmConversations,
+  messages,
 } from '../../db/schema/index.js';
 import { eq, and, count, sql } from 'drizzle-orm';
 import {
   generateUUIDv7,
   Permissions,
   updateServerSchema,
+  MessageType,
 } from 'ecto-shared';
-import { formatServer, formatMember, formatChannel } from '../../utils/format.js';
+import { formatServer, formatMember, formatChannel, formatMessage, formatMessageAuthor } from '../../utils/format.js';
 import { requirePermission, requireMember } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
@@ -90,6 +92,8 @@ export const serverRouter = router({
       if (input.name !== undefined) updates['name'] = input.name;
       if (input.description !== undefined) updates['description'] = input.description;
       if (input.icon_url !== undefined) updates['iconUrl'] = input.icon_url;
+      if (input.banner_url !== undefined) updates['bannerUrl'] = input.banner_url;
+      if (input.default_channel_id !== undefined) updates['defaultChannelId'] = input.default_channel_id;
 
       await ctx.db.update(servers).set(updates).where(eq(servers.id, ctx.serverId));
 
@@ -265,6 +269,35 @@ export const serverRouter = router({
       // Broadcast after transaction commits
       if (result.isNew) {
         eventDispatcher.dispatchToAll('member.join', result.member);
+
+        // Insert MEMBER_JOIN system message in the default channel
+        const [[srvCfg], [srv]] = await Promise.all([
+          d.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1),
+          d.select({ defaultChannelId: servers.defaultChannelId }).from(servers).where(eq(servers.id, ctx.serverId)).limit(1),
+        ]);
+
+        if (srvCfg?.showSystemMessages && srv?.defaultChannelId) {
+          const sysId = generateUUIDv7();
+          await d.insert(messages).values({
+            id: sysId,
+            channelId: srv.defaultChannelId,
+            authorId: userId,
+            content: null,
+            type: MessageType.MEMBER_JOIN,
+          });
+          const [sysRow] = await d.select().from(messages).where(eq(messages.id, sysId)).limit(1);
+          if (sysRow) {
+            const profile = (await resolveUserProfiles(d, [userId])).get(userId) ?? { username: 'Unknown', display_name: null, avatar_url: null };
+            const [memberRow] = await d
+              .select({ nickname: members.nickname })
+              .from(members)
+              .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, userId)))
+              .limit(1);
+            const author = formatMessageAuthor(profile, userId, memberRow?.nickname ?? null);
+            const sysFormatted = formatMessage(sysRow, author, [], []);
+            eventDispatcher.dispatchToChannel(srv.defaultChannelId, 'message.create', sysFormatted);
+          }
+        }
       }
 
       return {

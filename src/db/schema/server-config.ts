@@ -9,6 +9,7 @@ export const serverConfig = pgTable('server_config', {
   allowLocalAccounts: boolean('allow_local_accounts').notNull().default(true),
   requireInvite: boolean('require_invite').notNull().default(false),
   allowMemberDms: boolean('allow_member_dms').notNull().default(false),
+  showSystemMessages: boolean('show_system_messages').notNull().default(true),
   maxUploadSizeBytes: integer('max_upload_size_bytes').notNull().default(5242880),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

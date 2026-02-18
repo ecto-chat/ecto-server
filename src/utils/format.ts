@@ -28,9 +28,11 @@ export function formatServer(
     name: string;
     description: string | null;
     iconUrl: string | null;
+    bannerUrl: string | null;
     address: string | null;
     centralConnected: boolean;
     adminUserId: string | null;
+    defaultChannelId: string | null;
   },
   config?: { setupCompleted: boolean },
 ): Server {
@@ -39,10 +41,12 @@ export function formatServer(
     name: row.name,
     description: row.description,
     icon_url: row.iconUrl,
+    banner_url: row.bannerUrl,
     address: row.address ?? '',
     central_connected: row.centralConnected,
     setup_completed: config?.setupCompleted ?? true,
     admin_user_id: row.adminUserId,
+    default_channel_id: row.defaultChannelId ?? null,
   };
 }
 

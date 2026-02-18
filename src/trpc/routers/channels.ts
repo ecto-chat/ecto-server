@@ -226,7 +226,7 @@ export const channelsRouter = router({
           z.object({
             channel_id: z.string().uuid(),
             position: z.number().int().min(0),
-            category_id: z.string().uuid().optional(),
+            category_id: z.string().uuid().nullable().optional(),
           }),
         ),
       }),

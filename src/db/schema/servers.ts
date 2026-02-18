@@ -5,10 +5,12 @@ export const servers = pgTable('servers', {
   name: varchar('name', { length: 100 }).notNull(),
   description: text('description'),
   iconUrl: varchar('icon_url', { length: 512 }),
+  bannerUrl: varchar('banner_url', { length: 512 }),
   address: varchar('address', { length: 255 }),
   adminUserId: uuid('admin_user_id'),
   adminIdentityType: varchar('admin_identity_type', { length: 10 }).notNull().default('global'),
   centralConnected: boolean('central_connected').notNull().default(false),
+  defaultChannelId: uuid('default_channel_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
