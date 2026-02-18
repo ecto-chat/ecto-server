@@ -1,7 +1,7 @@
 import { z } from 'zod/v4';
 import argon2 from 'argon2';
 import { router, protectedProcedure } from '../init.js';
-import { members, memberRoles, roles, bans, messages, servers, localUsers } from '../../db/schema/index.js';
+import { members, memberRoles, roles, bans, messages, servers, localUsers, cachedProfiles } from '../../db/schema/index.js';
 import { signServerToken } from '../../utils/jwt.js';
 import { eq, and, count, ilike, or, lt, desc, inArray, sql } from 'drizzle-orm';
 import { generateUUIDv7, Permissions } from 'ecto-shared';
@@ -368,6 +368,62 @@ export const membersRouter = router({
     .mutation(async ({ ctx, input }) => {
       const member = await requireMember(ctx.db, ctx.serverId, ctx.user.id);
       await ctx.db.update(members).set({ allowDms: input.allow_dms }).where(eq(members.id, member.id));
+      return { success: true };
+    }),
+
+  syncProfile: protectedProcedure
+    .input(
+      z.object({
+        display_name: z.string().max(64).nullable().optional(),
+        avatar_url: z.string().max(512).nullable().optional(),
+        username: z.string().max(32).optional(),
+        discriminator: z.string().max(4).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const d = ctx.db;
+
+      // Upsert cached_profiles for this user
+      const profileUpdates: Record<string, unknown> = { fetchedAt: new Date() };
+      if (input.username !== undefined) profileUpdates.username = input.username;
+      if (input.discriminator !== undefined) profileUpdates.discriminator = input.discriminator;
+      if (input.display_name !== undefined) profileUpdates.displayName = input.display_name;
+      if (input.avatar_url !== undefined) profileUpdates.avatarUrl = input.avatar_url;
+
+      const [existing] = await d
+        .select({ userId: cachedProfiles.userId })
+        .from(cachedProfiles)
+        .where(eq(cachedProfiles.userId, ctx.user.id))
+        .limit(1);
+
+      if (existing) {
+        await d
+          .update(cachedProfiles)
+          .set(profileUpdates)
+          .where(eq(cachedProfiles.userId, ctx.user.id));
+      }
+
+      // Look up member row + roles for broadcast
+      const [memberRow] = await d
+        .select()
+        .from(members)
+        .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, ctx.user.id)))
+        .limit(1);
+
+      if (memberRow) {
+        const profile = (await resolveUserProfiles(d, [ctx.user.id])).get(ctx.user.id) ?? {
+          username: 'Unknown',
+          display_name: null,
+          avatar_url: null,
+        };
+        const mrRows = await d
+          .select({ roleId: memberRoles.roleId })
+          .from(memberRoles)
+          .where(eq(memberRoles.memberId, memberRow.id));
+        const formatted = formatMember(memberRow, profile, mrRows.map((r) => r.roleId));
+        eventDispatcher.dispatchToAll('member.update', formatted);
+      }
+
       return { success: true };
     }),
 
