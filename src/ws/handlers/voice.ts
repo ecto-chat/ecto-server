@@ -172,17 +172,14 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
               rtpCapabilities,
             );
             if (consumer) {
-              session.ws.send(JSON.stringify({
-                event: 'voice.new_consumer',
-                data: {
-                  consumer_id: consumer.id,
-                  producer_id: prod.producerId,
-                  user_id: prod.userId,
-                  kind: consumer.kind,
-                  rtpParameters: consumer.rtpParameters,
-                  source: prod.source,
-                },
-              }));
+              eventDispatcher.dispatchToUser(session.userId, 'voice.new_consumer', {
+                consumer_id: consumer.id,
+                producer_id: prod.producerId,
+                user_id: prod.userId,
+                kind: consumer.kind,
+                rtpParameters: consumer.rtpParameters,
+                source: prod.source,
+              });
             }
           } catch {
             // Consumer creation can fail if capabilities don't match

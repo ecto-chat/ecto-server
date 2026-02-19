@@ -56,6 +56,7 @@ export function setupMainWebSocket(): WebSocketServer {
     }, 10_000);
 
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    let voiceMessageQueue: Promise<void> = Promise.resolve();
 
     ws.on('message', async (raw) => {
       const parsed = wsMessageSchema.safeParse((() => { try { return JSON.parse(raw.toString()); } catch { return null; } })());
@@ -298,9 +299,11 @@ export function setupMainWebSocket(): WebSocketServer {
         }
 
         default: {
-          // Voice events
+          // Voice events — serialize per session to prevent race conditions
           if (msg.event.startsWith('voice.')) {
-            await handleVoiceMessage(session, msg);
+            voiceMessageQueue = voiceMessageQueue
+              .then(() => handleVoiceMessage(session, msg))
+              .catch((err) => { console.error('[ws] voice handler error:', msg.event, err); });
           }
           break;
         }

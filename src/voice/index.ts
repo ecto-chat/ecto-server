@@ -363,11 +363,15 @@ class VoiceManager {
       if (!key.endsWith(`:${userId}`)) continue;
       const channelId = key.split(':')[0]!;
 
-      // Close all producers for this user in this channel
+      // Collect producer IDs first to avoid mutating the map during iteration
+      const producerIdsToClose: string[] = [];
       for (const [producerId, meta] of this.producerMeta) {
         if (meta.channelId === channelId && meta.userId === userId) {
-          this.closeProducer(producerId);
+          producerIdsToClose.push(producerId);
         }
+      }
+      for (const id of producerIdsToClose) {
+        this.closeProducer(id);
       }
 
       // Close all consumers for this user
