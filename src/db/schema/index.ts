@@ -19,3 +19,6 @@ export { auditLog } from './audit-log.js';
 export { dmConversations } from './dm-conversations.js';
 export { webhooks } from './webhooks.js';
 export { pageContents, pageRevisions } from './pages.js';
+export { sharedFolders } from './shared-folders.js';
+export { sharedFiles } from './shared-files.js';
+export { sharedItemPermissionOverrides } from './shared-item-permission-overrides.js';

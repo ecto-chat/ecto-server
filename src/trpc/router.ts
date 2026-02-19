@@ -15,6 +15,7 @@ import { serverDmsRouter } from './routers/server-dms.js';
 import { webhooksRouter } from './routers/webhooks.js';
 import { searchRouter } from './routers/search.js';
 import { pagesRouter } from './routers/pages.js';
+import { hubFilesRouter } from './routers/hub-files.js';
 
 export { router, publicProcedure, protectedProcedure };
 
@@ -35,6 +36,7 @@ export const appRouter = router({
   webhooks: webhooksRouter,
   search: searchRouter,
   pages: pagesRouter,
+  hubFiles: hubFilesRouter,
 });
 
 export type AppRouter = typeof appRouter;

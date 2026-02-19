@@ -1,4 +1,4 @@
-import { pgTable, uuid, boolean, integer, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, boolean, integer, bigint, timestamp } from 'drizzle-orm/pg-core';
 import { servers } from './servers.js';
 
 export const serverConfig = pgTable('server_config', {
@@ -11,6 +11,7 @@ export const serverConfig = pgTable('server_config', {
   allowMemberDms: boolean('allow_member_dms').notNull().default(false),
   showSystemMessages: boolean('show_system_messages').notNull().default(true),
   maxUploadSizeBytes: integer('max_upload_size_bytes').notNull().default(5242880),
+  maxSharedStorageBytes: bigint('max_shared_storage_bytes', { mode: 'number' }).notNull().default(104857600),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

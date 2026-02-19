@@ -21,6 +21,7 @@ export const serverConfigRouter = router({
 
     return {
       max_upload_size_bytes: cfg.maxUploadSizeBytes,
+      max_shared_storage_bytes: cfg.maxSharedStorageBytes,
       allow_local_accounts: cfg.allowLocalAccounts,
       require_invite: cfg.requireInvite,
       allow_member_dms: cfg.allowMemberDms,
@@ -33,6 +34,7 @@ export const serverConfigRouter = router({
     .input(
       z.object({
         max_upload_size_bytes: z.number().int().min(0).optional(),
+        max_shared_storage_bytes: z.number().int().min(0).optional(),
         allow_local_accounts: z.boolean().optional(),
         require_invite: z.boolean().optional(),
         allow_member_dms: z.boolean().optional(),
@@ -44,6 +46,7 @@ export const serverConfigRouter = router({
 
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (input.max_upload_size_bytes !== undefined) updates['maxUploadSizeBytes'] = input.max_upload_size_bytes;
+      if (input.max_shared_storage_bytes !== undefined) updates['maxSharedStorageBytes'] = input.max_shared_storage_bytes;
       if (input.allow_local_accounts !== undefined) updates['allowLocalAccounts'] = input.allow_local_accounts;
       if (input.require_invite !== undefined) updates['requireInvite'] = input.require_invite;
       if (input.allow_member_dms !== undefined) updates['allowMemberDms'] = input.allow_member_dms;

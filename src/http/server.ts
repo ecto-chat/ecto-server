@@ -4,6 +4,7 @@ import type { Config } from '../config/index.js';
 import { appRouter } from '../trpc/router.js';
 import { createContext } from '../trpc/context.js';
 import { handleFileUpload } from './file-upload.js';
+import { handleSharedFileUpload } from './shared-file-upload.js';
 import { handleIconUpload, handleBannerUpload, handlePageBannerUpload } from './icon-upload.js';
 import { handleFileServe } from './file-serve.js';
 import { handleWebhookExecute } from './webhook-execute.js';
@@ -53,6 +54,12 @@ export async function createServer(_config: Config) {
     // Page banner upload
     if (url.pathname.startsWith('/upload/page-banner/') && req.method === 'POST') {
       await handlePageBannerUpload(req, res, url.pathname.split('/')[3] ?? '');
+      return;
+    }
+
+    // Shared file upload
+    if (url.pathname === '/upload/shared' && req.method === 'POST') {
+      await handleSharedFileUpload(req, res);
       return;
     }
 
