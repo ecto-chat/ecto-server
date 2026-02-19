@@ -63,7 +63,8 @@ export async function handleBannerUpload(req: IncomingMessage, res: ServerRespon
     await fs.promises.mkdir(dir, { recursive: true });
     await fs.promises.writeFile(path.join(dir, bannerFilename), file.data);
 
-    const baseUrl = `http://${req.headers.host ?? `localhost:${config.PORT}`}`;
+    const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const baseUrl = `${proto}://${req.headers.host ?? `localhost:${config.PORT}`}`;
     const bannerUrl = `${baseUrl}/files/${serverId}/banners/${bannerFilename}`;
 
     await d.update(servers).set({ bannerUrl, updatedAt: new Date() }).where(eq(servers.id, serverId));
@@ -139,7 +140,8 @@ export async function handlePageBannerUpload(req: IncomingMessage, res: ServerRe
     await fs.promises.mkdir(dir, { recursive: true });
     await fs.promises.writeFile(path.join(dir, bannerFilename), file.data);
 
-    const baseUrl = `http://${req.headers.host ?? `localhost:${config.PORT}`}`;
+    const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const baseUrl = `${proto}://${req.headers.host ?? `localhost:${config.PORT}`}`;
     const bannerUrl = `${baseUrl}/files/${serverId}/page-banners/${bannerFilename}`;
 
     await d.update(pageContents).set({ bannerUrl }).where(eq(pageContents.channelId, channelId));
@@ -223,7 +225,8 @@ export async function handleIconUpload(req: IncomingMessage, res: ServerResponse
     await fs.promises.mkdir(dir, { recursive: true });
     await fs.promises.writeFile(path.join(dir, iconFilename), file.data);
 
-    const baseUrl = `http://${req.headers.host ?? `localhost:${config.PORT}`}`;
+    const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const baseUrl = `${proto}://${req.headers.host ?? `localhost:${config.PORT}`}`;
     const iconUrl = `${baseUrl}/files/${serverId}/icons/${iconFilename}`;
 
     // Update server row

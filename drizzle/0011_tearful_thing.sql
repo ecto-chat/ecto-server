@@ -1,4 +1,4 @@
-CREATE TABLE "shared_item_permission_overrides" (
+CREATE TABLE IF NOT EXISTS "shared_item_permission_overrides" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"item_type" varchar(10) NOT NULL,
 	"item_id" uuid NOT NULL,
@@ -11,4 +11,4 @@ CREATE TABLE "shared_item_permission_overrides" (
 --> statement-breakpoint
 ALTER TABLE "server_config" ALTER COLUMN "max_shared_storage_bytes" SET DATA TYPE bigint;--> statement-breakpoint
 ALTER TABLE "server_config" ALTER COLUMN "max_shared_storage_bytes" SET DEFAULT 104857600;--> statement-breakpoint
-CREATE INDEX "idx_shared_item_perms_item" ON "shared_item_permission_overrides" USING btree ("item_type","item_id");
+CREATE INDEX IF NOT EXISTS "idx_shared_item_perms_item" ON "shared_item_permission_overrides" USING btree ("item_type","item_id");
