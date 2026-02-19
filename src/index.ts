@@ -27,7 +27,17 @@ async function main() {
   const d = db();
   console.log('Database connected');
 
-  // 2. Ensure server row exists
+  // 2. Run migrations
+  if (config.DATABASE_TYPE === 'sqlite') {
+    const { migrate } = await import('drizzle-orm/better-sqlite3/migrator');
+    migrate(d as any, { migrationsFolder: './drizzle' });
+  } else {
+    const { migrate } = await import('drizzle-orm/node-postgres/migrator');
+    await migrate(d as any, { migrationsFolder: './drizzle' });
+  }
+  console.log('Migrations applied');
+
+  // 3. Ensure server row exists
   const [existingServer] = await d.select().from(servers).limit(1);
   let serverId: string;
 
@@ -45,7 +55,7 @@ async function main() {
 
   setServerId(serverId);
 
-  // 3. Ensure server_config row exists
+  // 4. Ensure server_config row exists
   const [existingConfig] = await d
     .select()
     .from(serverConfig)
@@ -57,7 +67,7 @@ async function main() {
     console.log('Created server_config row');
   }
 
-  // 4. Ensure @everyone role exists
+  // 5. Ensure @everyone role exists
   const [existingDefault] = await d
     .select()
     .from(roles)
@@ -76,7 +86,7 @@ async function main() {
     console.log('Created @everyone role');
   }
 
-  // 5. Initialize voice (mediasoup workers)
+  // 6. Initialize voice (mediasoup workers)
   await voiceManager.initialize();
 
   // 7. Start HTTP server
