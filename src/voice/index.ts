@@ -3,6 +3,33 @@ import type { types as mediasoupTypes } from 'mediasoup';
 import os from 'node:os';
 import { config } from '../config/index.js';
 
+/** Resolve the public IP for ICE candidates. */
+async function resolveAnnouncedIp(): Promise<string | undefined> {
+  // Explicit config always wins
+  if (config.SERVER_ADDRESS) return config.SERVER_ADDRESS;
+
+  // Auto-detect via public API
+  try {
+    const res = await fetch('https://api.ipify.org?format=text', { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      const ip = (await res.text()).trim();
+      console.log(`mediasoup: auto-detected public IP ${ip}`);
+      return ip;
+    }
+  } catch { /* ignore */ }
+
+  // Fallback: first non-loopback IPv4 interface
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    if (!ifaces) continue;
+    for (const iface of ifaces) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+
+  console.warn('mediasoup: could not determine public IP — set SERVER_ADDRESS env var for remote clients');
+  return undefined;
+}
+
 const MEDIA_CODECS: mediasoupTypes.RouterRtpCodecCapability[] = [
   {
     kind: 'audio',
@@ -72,7 +99,10 @@ class VoiceManager {
   // userId → device RTP capabilities (set via voice.capabilities)
   private deviceCapabilities = new Map<string, mediasoupTypes.RtpCapabilities>();
 
+  private announcedIp: string | undefined;
+
   async initialize(): Promise<void> {
+    this.announcedIp = await resolveAnnouncedIp();
     const numWorkers = Math.max(1, Math.floor(os.cpus().length / 2));
     for (let i = 0; i < numWorkers; i++) {
       const worker = await mediasoup.createWorker({
@@ -96,13 +126,13 @@ class VoiceManager {
       // share a single UDP+TCP port via ICE mux
       const webRtcServer = await worker.createWebRtcServer({
         listenInfos: [
-          { protocol: 'udp', ip: '0.0.0.0', announcedAddress: config.SERVER_ADDRESS, port: config.MEDIASOUP_MIN_PORT + i },
-          { protocol: 'tcp', ip: '0.0.0.0', announcedAddress: config.SERVER_ADDRESS, port: config.MEDIASOUP_MIN_PORT + i },
+          { protocol: 'udp', ip: '0.0.0.0', announcedAddress: this.announcedIp, port: config.MEDIASOUP_MIN_PORT + i },
+          { protocol: 'tcp', ip: '0.0.0.0', announcedAddress: this.announcedIp, port: config.MEDIASOUP_MIN_PORT + i },
         ],
       });
       this.webRtcServers.set(worker, webRtcServer);
     }
-    console.log(`mediasoup: ${numWorkers} worker(s) created (WebRtcServer on port(s) ${config.MEDIASOUP_MIN_PORT}–${config.MEDIASOUP_MIN_PORT + numWorkers - 1})`);
+    console.log(`mediasoup: ${numWorkers} worker(s) created, announced IP: ${this.announcedIp ?? '(none)'}, port(s) ${config.MEDIASOUP_MIN_PORT}–${config.MEDIASOUP_MIN_PORT + numWorkers - 1}`);
   }
 
   private async createWorkerWithServer(): Promise<void> {
@@ -114,8 +144,8 @@ class VoiceManager {
     const port = config.MEDIASOUP_MIN_PORT + this.workers.length;
     const webRtcServer = await worker.createWebRtcServer({
       listenInfos: [
-        { protocol: 'udp', ip: '0.0.0.0', announcedAddress: config.SERVER_ADDRESS, port },
-        { protocol: 'tcp', ip: '0.0.0.0', announcedAddress: config.SERVER_ADDRESS, port },
+        { protocol: 'udp', ip: '0.0.0.0', announcedAddress: this.announcedIp, port },
+        { protocol: 'tcp', ip: '0.0.0.0', announcedAddress: this.announcedIp, port },
       ],
     });
     this.workers.push(worker);

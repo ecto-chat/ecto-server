@@ -3,12 +3,13 @@ services:
     build: .
     ports:
       - "3000:3000"
-      - "3478:3478/udp"
-      - "40000-40100:40000-40100/udp"
+      - "40000:40000/udp"
+      - "40000:40000/tcp"
     environment:
       DATABASE_URL: postgres://ecto:ecto@db:5432/ecto
       DATABASE_TYPE: pg
       JWT_SECRET: change-me
+      # SERVER_ADDRESS: your-public-ip  # Set to your server's public IP for remote voice/video
     depends_on:
       db:
         condition: service_healthy
