@@ -48,6 +48,8 @@ interface ProducerInfo {
 class VoiceManager {
   private workers: mediasoupTypes.Worker[] = [];
   private nextWorkerIdx = 0;
+  // worker → WebRtcServer (one per worker, single port, ICE mux)
+  private webRtcServers = new Map<mediasoupTypes.Worker, mediasoupTypes.WebRtcServer>();
 
   // channelId → Router
   private routers = new Map<string, mediasoupTypes.Router>();
@@ -80,22 +82,44 @@ class VoiceManager {
       });
       worker.on('died', () => {
         console.error(`mediasoup Worker ${worker.pid} died, restarting...`);
+        this.webRtcServers.delete(worker);
         const idx = this.workers.indexOf(worker);
         if (idx !== -1) this.workers.splice(idx, 1);
-        // Restart worker
-        mediasoup.createWorker({
-          logLevel: 'warn',
-          rtcMinPort: config.MEDIASOUP_MIN_PORT,
-          rtcMaxPort: config.MEDIASOUP_MAX_PORT,
-        }).then((w) => {
-          this.workers.push(w);
-        }).catch((err) => {
+        // Restart worker + WebRtcServer
+        this.createWorkerWithServer().catch((err) => {
           console.error('Failed to restart mediasoup Worker:', err);
         });
       });
       this.workers.push(worker);
+
+      // Create a WebRtcServer per worker — all transports on this worker
+      // share a single UDP+TCP port via ICE mux
+      const webRtcServer = await worker.createWebRtcServer({
+        listenInfos: [
+          { protocol: 'udp', ip: '0.0.0.0', announcedAddress: config.SERVER_ADDRESS, port: config.MEDIASOUP_MIN_PORT + i },
+          { protocol: 'tcp', ip: '0.0.0.0', announcedAddress: config.SERVER_ADDRESS, port: config.MEDIASOUP_MIN_PORT + i },
+        ],
+      });
+      this.webRtcServers.set(worker, webRtcServer);
     }
-    console.log(`mediasoup: ${numWorkers} worker(s) created`);
+    console.log(`mediasoup: ${numWorkers} worker(s) created (WebRtcServer on port(s) ${config.MEDIASOUP_MIN_PORT}–${config.MEDIASOUP_MIN_PORT + numWorkers - 1})`);
+  }
+
+  private async createWorkerWithServer(): Promise<void> {
+    const worker = await mediasoup.createWorker({
+      logLevel: 'warn',
+      rtcMinPort: config.MEDIASOUP_MIN_PORT,
+      rtcMaxPort: config.MEDIASOUP_MAX_PORT,
+    });
+    const port = config.MEDIASOUP_MIN_PORT + this.workers.length;
+    const webRtcServer = await worker.createWebRtcServer({
+      listenInfos: [
+        { protocol: 'udp', ip: '0.0.0.0', announcedAddress: config.SERVER_ADDRESS, port },
+        { protocol: 'tcp', ip: '0.0.0.0', announcedAddress: config.SERVER_ADDRESS, port },
+      ],
+    });
+    this.workers.push(worker);
+    this.webRtcServers.set(worker, webRtcServer);
   }
 
   private getNextWorker(): mediasoupTypes.Worker {
@@ -105,6 +129,9 @@ class VoiceManager {
     return worker;
   }
 
+  // router → worker (to look up WebRtcServer)
+  private routerWorker = new Map<mediasoupTypes.Router, mediasoupTypes.Worker>();
+
   async getOrCreateRouter(channelId: string): Promise<mediasoupTypes.Router> {
     const existing = this.routers.get(channelId);
     if (existing && !existing.closed) return existing;
@@ -112,7 +139,16 @@ class VoiceManager {
     const worker = this.getNextWorker();
     const router = await worker.createRouter({ mediaCodecs: MEDIA_CODECS });
     this.routers.set(channelId, router);
+    this.routerWorker.set(router, worker);
     return router;
+  }
+
+  private getWebRtcServerForRouter(router: mediasoupTypes.Router): mediasoupTypes.WebRtcServer {
+    const worker = this.routerWorker.get(router);
+    if (!worker) throw new Error('No worker found for router');
+    const server = this.webRtcServers.get(worker);
+    if (!server) throw new Error('No WebRtcServer found for worker');
+    return server;
   }
 
   getRouter(channelId: string): mediasoupTypes.Router | undefined {
@@ -131,24 +167,10 @@ class VoiceManager {
     const router = this.routers.get(channelId);
     if (!router || router.closed) throw new Error('No router for channel');
 
+    // Find the WebRtcServer for the worker that owns this router
+    const webRtcServer = this.getWebRtcServerForRouter(router);
     const transportOptions: mediasoupTypes.WebRtcTransportOptions = {
-      listenInfos: [{
-        protocol: 'udp',
-        ip: '0.0.0.0',
-        announcedAddress: config.SERVER_ADDRESS,
-        portRange: {
-          min: config.MEDIASOUP_MIN_PORT,
-          max: config.MEDIASOUP_MAX_PORT,
-        },
-      }, {
-        protocol: 'tcp',
-        ip: '0.0.0.0',
-        announcedAddress: config.SERVER_ADDRESS,
-        portRange: {
-          min: config.MEDIASOUP_MIN_PORT,
-          max: config.MEDIASOUP_MAX_PORT,
-        },
-      }],
+      webRtcServer,
       enableUdp: true,
       enableTcp: true,
       preferUdp: true,
@@ -404,8 +426,9 @@ class VoiceManager {
           this.channelUsers.delete(channelId);
           // Destroy router if no users left
           const router = this.routers.get(channelId);
-          if (router && !router.closed) {
-            router.close();
+          if (router) {
+            this.routerWorker.delete(router);
+            if (!router.closed) router.close();
           }
           this.routers.delete(channelId);
         }
@@ -418,6 +441,8 @@ class VoiceManager {
       worker.close();
     }
     this.workers = [];
+    this.webRtcServers.clear();
+    this.routerWorker.clear();
     this.routers.clear();
     this.channelUsers.clear();
     this.transports.clear();

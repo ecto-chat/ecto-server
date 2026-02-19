@@ -1,0 +1,49 @@
+app = "ecto-server"
+primary_region = "dfw"
+
+[build]
+
+[env]
+DATABASE_TYPE = "pg"
+PORT = "3000"
+SERVER_ADDRESS = "213.188.195.94"
+MEDIASOUP_MIN_PORT = "40000"
+MEDIASOUP_MAX_PORT = "40100"
+
+[mounts]
+source = "ecto_data"
+destination = "/app/data"
+
+[http_service]
+internal_port = 3000
+force_https = true
+auto_stop_machines = true
+auto_start_machines = true
+min_machines_running = 1
+
+[[http_service.checks]]
+interval = "30s"
+timeout = "5s"
+grace_period = "30s"
+method = "GET"
+path = "/health"
+
+# mediasoup WebRtcServer — UDP+TCP on port 40000 (ICE mux)
+[[services]]
+internal_port = 40000
+protocol = "udp"
+
+[[services.ports]]
+port = 40000
+
+[[services]]
+internal_port = 40000
+protocol = "tcp"
+
+[[services.ports]]
+port = 40000
+
+[[vm]]
+memory = "512mb"
+cpu_kind = "shared"
+cpus = 1
