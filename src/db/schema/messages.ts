@@ -1,11 +1,10 @@
-import { pgTable, uuid, text, smallint, boolean, timestamp, index, customType } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, smallint, boolean, timestamp, index } from 'drizzle-orm/pg-core';
 
-/** PG tsvector type — GENERATED ALWAYS column, not insertable/updatable */
-const tsvector = customType<{ data: string }>({
-  dataType() {
-    return 'tsvector';
-  },
-});
+// NOTE: The `search_vector` tsvector column exists in the DB (migration 0002)
+// but is intentionally excluded from the Drizzle schema. It is a GENERATED ALWAYS
+// column used only via raw SQL in search.ts. Including it here would cause
+// SELECT * queries to reference it, breaking on databases where the migration
+// hasn't been applied yet.
 
 export const messages = pgTable(
   'messages',
@@ -24,8 +23,6 @@ export const messages = pgTable(
     webhookId: uuid('webhook_id'),
     editedAt: timestamp('edited_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    /** Generated column — to_tsvector('english', coalesce(content, '')) */
-    searchVector: tsvector('search_vector'),
   },
   (table) => [
     index('idx_messages_channel').on(table.channelId, table.id),
