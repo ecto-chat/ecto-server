@@ -100,9 +100,10 @@ export async function cleanupMemberData(d: Parameters<typeof checkHierarchy>[0],
     ));
 
   if (userConvos.length > 0) {
-    await d.delete(dmReadStates).where(
+    await d.delete(dmReadStates).where(and(
+      eq(dmReadStates.userId, userId),
       inArray(dmReadStates.conversationId, userConvos.map(c => c.id)),
-    );
+    ));
   }
 }
 
