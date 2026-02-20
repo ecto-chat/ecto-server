@@ -15,13 +15,42 @@ export const pagesRouter = router({
     .query(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.READ_MESSAGES, input.channel_id);
 
-      const [row] = await ctx.db
+      let [row] = await ctx.db
         .select()
         .from(pageContents)
         .where(eq(pageContents.channelId, input.channel_id))
         .limit(1);
 
-      if (!row) throw ectoError('NOT_FOUND', 3000, 'Page content not found');
+      // Auto-create missing page_contents row for page channels (backfill)
+      if (!row) {
+        const [ch] = await ctx.db
+          .select({ type: channels.type })
+          .from(channels)
+          .where(and(eq(channels.id, input.channel_id), eq(channels.serverId, ctx.serverId)))
+          .limit(1);
+
+        if (!ch || ch.type !== 'page') {
+          throw ectoError('NOT_FOUND', 3000, 'Page content not found');
+        }
+
+        const now = new Date();
+        await ctx.db.insert(pageContents).values({
+          channelId: input.channel_id,
+          content: '',
+          version: 1,
+          editedBy: null,
+          editedAt: now,
+        });
+
+        row = {
+          channelId: input.channel_id,
+          content: '',
+          bannerUrl: null,
+          version: 1,
+          editedBy: null,
+          editedAt: now,
+        };
+      }
 
       return {
         channel_id: row.channelId,
