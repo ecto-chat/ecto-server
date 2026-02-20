@@ -1,7 +1,7 @@
 import { z } from 'zod/v4';
 import argon2 from 'argon2';
 import { router, protectedProcedure } from '../init.js';
-import { members, memberRoles, roles, bans, messages, servers, localUsers, cachedProfiles } from '../../db/schema/index.js';
+import { members, memberRoles, roles, bans, messages, servers, localUsers, cachedProfiles, readStates, channels, dmConversations, dmReadStates } from '../../db/schema/index.js';
 import { signServerToken } from '../../utils/jwt.js';
 import { eq, and, count, ilike, or, lt, desc, inArray, sql } from 'drizzle-orm';
 import { generateUUIDv7, Permissions } from 'ecto-shared';
@@ -72,6 +72,37 @@ async function checkHierarchy(d: typeof import('../../db/index.js').db extends (
 
   if (actorPos <= targetPos) {
     throw ectoError('FORBIDDEN', 5004, 'Role hierarchy violation');
+  }
+}
+
+/** Clean up read states and DM data when a member is removed (kick/ban/leave) */
+export async function cleanupMemberData(d: Parameters<typeof checkHierarchy>[0], serverId: string, userId: string) {
+  // Clean read states for this server's channels
+  const serverChannelIds = await d
+    .select({ id: channels.id })
+    .from(channels)
+    .where(eq(channels.serverId, serverId));
+
+  if (serverChannelIds.length > 0) {
+    await d.delete(readStates).where(and(
+      eq(readStates.userId, userId),
+      inArray(readStates.channelId, serverChannelIds.map(c => c.id)),
+    ));
+  }
+
+  // Clean DM read states for conversations involving this user
+  const userConvos = await d
+    .select({ id: dmConversations.id })
+    .from(dmConversations)
+    .where(and(
+      eq(dmConversations.serverId, serverId),
+      sql`(${dmConversations.userA} = ${userId} OR ${dmConversations.userB} = ${userId})`,
+    ));
+
+  if (userConvos.length > 0) {
+    await d.delete(dmReadStates).where(
+      inArray(dmReadStates.conversationId, userConvos.map(c => c.id)),
+    );
   }
 }
 
@@ -165,6 +196,7 @@ export const membersRouter = router({
       const d = ctx.db;
       await d.transaction(async (tx) => {
         const target = await requireMember(tx, ctx.serverId, input.user_id);
+        await cleanupMemberData(tx, ctx.serverId, input.user_id);
         await tx.delete(members).where(eq(members.id, target.id));
 
         await insertAuditLog(tx, {
@@ -224,7 +256,8 @@ export const membersRouter = router({
           }
         }
 
-        // Remove member
+        // Clean up member data and remove member
+        await cleanupMemberData(tx, ctx.serverId, input.user_id);
         const [target] = await tx
           .select({ id: members.id })
           .from(members)
@@ -274,36 +307,42 @@ export const membersRouter = router({
     .input(z.object({ user_id: z.string().uuid(), role_ids: z.array(z.string().uuid()) }))
     .mutation(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_ROLES);
+      await checkHierarchy(ctx.db, ctx.serverId, ctx.user.id, input.user_id);
       const d = ctx.db;
 
-      const target = await requireMember(d, ctx.serverId, input.user_id);
+      const allRoleIds = await d.transaction(async (tx) => {
+        const target = await requireMember(tx, ctx.serverId, input.user_id);
 
-      // Delete old non-default roles
-      await d.delete(memberRoles).where(eq(memberRoles.memberId, target.id));
+        // Delete old roles
+        await tx.delete(memberRoles).where(eq(memberRoles.memberId, target.id));
 
-      // Always include @everyone
-      const [defaultRole] = await d
-        .select({ id: roles.id })
-        .from(roles)
-        .where(and(eq(roles.serverId, ctx.serverId), eq(roles.isDefault, true)))
-        .limit(1);
+        // Always include @everyone
+        const [defaultRole] = await tx
+          .select({ id: roles.id })
+          .from(roles)
+          .where(and(eq(roles.serverId, ctx.serverId), eq(roles.isDefault, true)))
+          .limit(1);
 
-      const allRoleIds = defaultRole ? [defaultRole.id, ...input.role_ids.filter((id) => id !== defaultRole.id)] : input.role_ids;
+        const roleIds = defaultRole ? [defaultRole.id, ...input.role_ids.filter((id) => id !== defaultRole.id)] : input.role_ids;
 
-      if (allRoleIds.length > 0) {
-        await d.insert(memberRoles).values(allRoleIds.map((roleId) => ({ memberId: target.id, roleId })));
-      }
+        if (roleIds.length > 0) {
+          await tx.insert(memberRoles).values(roleIds.map((roleId) => ({ memberId: target.id, roleId })));
+        }
 
-      await insertAuditLog(d, {
-        serverId: ctx.serverId,
-        actorId: ctx.user.id,
-        action: 'member.roles_update',
-        targetType: 'member',
-        targetId: input.user_id,
-        details: { role_ids: input.role_ids },
+        await insertAuditLog(tx, {
+          serverId: ctx.serverId,
+          actorId: ctx.user.id,
+          action: 'member.roles_update',
+          targetType: 'member',
+          targetId: input.user_id,
+          details: { role_ids: input.role_ids },
+        });
+
+        return roleIds;
       });
 
-      // Re-fetch member
+      // Re-fetch and broadcast after transaction commits
+      const target = await requireMember(d, ctx.serverId, input.user_id);
       const [memberRow] = await d.select().from(members).where(eq(members.id, target.id)).limit(1);
       const profile = (await resolveUserProfiles(d, [input.user_id])).get(input.user_id) ?? { username: 'Unknown', display_name: null, avatar_url: null };
       const formatted = formatMember(memberRow!, profile, allRoleIds);
@@ -390,18 +429,20 @@ export const membersRouter = router({
       if (input.display_name !== undefined) profileUpdates.displayName = input.display_name;
       if (input.avatar_url !== undefined) profileUpdates.avatarUrl = input.avatar_url;
 
-      const [existing] = await d
-        .select({ userId: cachedProfiles.userId })
-        .from(cachedProfiles)
-        .where(eq(cachedProfiles.userId, ctx.user.id))
-        .limit(1);
-
-      if (existing) {
-        await d
-          .update(cachedProfiles)
-          .set(profileUpdates)
-          .where(eq(cachedProfiles.userId, ctx.user.id));
-      }
+      await d
+        .insert(cachedProfiles)
+        .values({
+          userId: ctx.user.id,
+          username: input.username ?? 'Unknown',
+          discriminator: input.discriminator ?? '0000',
+          displayName: input.display_name ?? null,
+          avatarUrl: input.avatar_url ?? null,
+          fetchedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: cachedProfiles.userId,
+          set: profileUpdates,
+        });
 
       // Look up member row + roles for broadcast
       const [memberRow] = await d

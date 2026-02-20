@@ -5,6 +5,7 @@ import { webhooks, channels } from '../../db/schema/index.js';
 import { eq, and } from 'drizzle-orm';
 import { generateUUIDv7, Permissions } from 'ecto-shared';
 import { requirePermission } from '../../utils/permission-context.js';
+import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 
 export const webhooksRouter = router({
@@ -38,6 +39,15 @@ export const webhooksRouter = router({
         createdBy: ctx.user.id,
       });
 
+      await insertAuditLog(ctx.db, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'webhook.create',
+        targetType: 'webhook',
+        targetId: id,
+        details: { name: input.name, channel_id: input.channel_id },
+      });
+
       const [row] = await ctx.db.select().from(webhooks).where(eq(webhooks.id, id)).limit(1);
       return formatWebhook(row!);
     }),
@@ -46,6 +56,14 @@ export const webhooksRouter = router({
     .input(z.object({ channel_id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_WEBHOOKS);
+
+      // Verify channel belongs to this server
+      const [ch] = await ctx.db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(and(eq(channels.id, input.channel_id), eq(channels.serverId, ctx.serverId)))
+        .limit(1);
+      if (!ch) throw ectoError('NOT_FOUND', 3000, 'Channel not found');
 
       const rows = await ctx.db
         .select()
@@ -60,15 +78,27 @@ export const webhooksRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_WEBHOOKS);
 
+      // Verify webhook belongs to this server via channel join
       const [webhook] = await ctx.db
-        .select()
+        .select({ id: webhooks.id, channelId: webhooks.channelId, name: webhooks.name })
         .from(webhooks)
-        .where(eq(webhooks.id, input.webhook_id))
+        .innerJoin(channels, eq(webhooks.channelId, channels.id))
+        .where(and(eq(webhooks.id, input.webhook_id), eq(channels.serverId, ctx.serverId)))
         .limit(1);
 
       if (!webhook) throw ectoError('NOT_FOUND', 4000, 'Webhook not found');
 
       await ctx.db.delete(webhooks).where(eq(webhooks.id, input.webhook_id));
+
+      await insertAuditLog(ctx.db, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'webhook.delete',
+        targetType: 'webhook',
+        targetId: input.webhook_id,
+        details: { name: webhook.name },
+      });
+
       return { success: true };
     }),
 
@@ -77,10 +107,12 @@ export const webhooksRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_WEBHOOKS);
 
+      // Verify webhook belongs to this server via channel join
       const [webhook] = await ctx.db
-        .select()
+        .select({ id: webhooks.id, name: webhooks.name })
         .from(webhooks)
-        .where(eq(webhooks.id, input.webhook_id))
+        .innerJoin(channels, eq(webhooks.channelId, channels.id))
+        .where(and(eq(webhooks.id, input.webhook_id), eq(channels.serverId, ctx.serverId)))
         .limit(1);
 
       if (!webhook) throw ectoError('NOT_FOUND', 4000, 'Webhook not found');
@@ -90,6 +122,15 @@ export const webhooksRouter = router({
         .update(webhooks)
         .set({ token: newToken })
         .where(eq(webhooks.id, input.webhook_id));
+
+      await insertAuditLog(ctx.db, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'webhook.update',
+        targetType: 'webhook',
+        targetId: input.webhook_id,
+        details: { token_regenerated: true },
+      });
 
       const [updated] = await ctx.db.select().from(webhooks).where(eq(webhooks.id, input.webhook_id)).limit(1);
       return formatWebhook(updated!);

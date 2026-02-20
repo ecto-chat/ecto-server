@@ -9,7 +9,6 @@ import {
   bans,
   channels,
   serverConfig,
-  dmConversations,
   messages,
 } from '../../db/schema/index.js';
 import { eq, and, count, sql } from 'drizzle-orm';
@@ -27,7 +26,10 @@ import { eventDispatcher } from '../../ws/event-dispatcher.js';
 import { cleanupVoiceState } from '../../utils/voice-cleanup.js';
 import { signServerToken } from '../../utils/jwt.js';
 import { registerLocal, loginLocal } from './local-auth.js';
+import { cleanupMemberData } from './members.js';
 import { resolveUserProfile, resolveUserProfiles } from '../../utils/resolve-profile.js';
+import { voiceStateManager } from '../../services/voice-state.js';
+import { WsCloseCode } from 'ecto-shared';
 import { presenceManager } from '../../services/presence.js';
 
 export const serverRouter = router({
@@ -325,7 +327,19 @@ export const serverRouter = router({
     // Clean up voice state before removing member
     cleanupVoiceState(ctx.user.id);
 
+    // Clean up read states and DM data
+    await cleanupMemberData(d, ctx.serverId, ctx.user.id);
+
     await d.delete(members).where(eq(members.id, member.id));
+
+    await insertAuditLog(d, {
+      serverId: ctx.serverId,
+      actorId: ctx.user.id,
+      action: 'member.leave',
+      targetType: 'member',
+      targetId: ctx.user.id,
+    });
+
     eventDispatcher.dispatchToAll('member.leave', { user_id: ctx.user.id });
     return { success: true };
   }),
@@ -340,7 +354,30 @@ export const serverRouter = router({
       if (server.adminUserId !== ctx.user.id) throw ectoError('FORBIDDEN', 5001, 'Only the server owner can delete the server');
       if (input.confirmation !== server.name) throw ectoError('BAD_REQUEST', 2000, 'Confirmation must match server name');
 
+      // Clean up all voice states before deleting
+      for (const state of voiceStateManager.getAllStates()) {
+        cleanupVoiceState(state.userId);
+      }
+
+      // Broadcast server deletion so clients disconnect
+      eventDispatcher.dispatchToAll('server.delete', { id: ctx.serverId });
+
+      await insertAuditLog(d, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'server.delete',
+        targetType: 'server',
+        targetId: ctx.serverId,
+        details: { name: server.name },
+      });
+
       await d.delete(servers).where(eq(servers.id, ctx.serverId));
+
+      // Disconnect all clients
+      for (const session of eventDispatcher.sessions.values()) {
+        session.ws.close(WsCloseCode.SERVER_SHUTTING_DOWN, 'Server deleted');
+      }
+
       return { success: true };
     }),
 
@@ -388,69 +425,11 @@ export const serverRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_SERVER);
       await ctx.db.update(servers).set({ iconUrl: input.icon_url, updatedAt: new Date() }).where(eq(servers.id, ctx.serverId));
-      eventDispatcher.dispatchToAll('server.update', { icon_url: input.icon_url });
-      return { icon_url: input.icon_url, sizes: {} as Record<string, string> };
+
+      // Broadcast full server object so clients get consistent payloads
+      const [updated] = await ctx.db.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
+      const formatted = formatServer(updated!);
+      eventDispatcher.dispatchToAll('server.update', formatted);
+      return { icon_url: input.icon_url };
     }),
-
-  dms: router({
-    open: protectedProcedure
-      .input(z.object({ user_id: z.string().uuid() }))
-      .mutation(async ({ ctx, input }) => {
-        await requireMember(ctx.db, ctx.serverId, ctx.user.id);
-        const d = ctx.db;
-
-        const [userA, userB] =
-          ctx.user.id < input.user_id ? [ctx.user.id, input.user_id] : [input.user_id, ctx.user.id];
-
-        const [existing] = await d
-          .select()
-          .from(dmConversations)
-          .where(
-            and(
-              eq(dmConversations.serverId, ctx.serverId),
-              eq(dmConversations.userA, userA),
-              eq(dmConversations.userB, userB),
-            ),
-          )
-          .limit(1);
-
-        if (existing) return { conversation_id: existing.id, created: false };
-
-        const id = generateUUIDv7();
-        await d.insert(dmConversations).values({ id, serverId: ctx.serverId, userA, userB });
-        return { conversation_id: id, created: true };
-      }),
-
-    list: protectedProcedure.query(async ({ ctx }) => {
-      await requireMember(ctx.db, ctx.serverId, ctx.user.id);
-      const d = ctx.db;
-
-      const conversations = await d
-        .select()
-        .from(dmConversations)
-        .where(
-          and(
-            eq(dmConversations.serverId, ctx.serverId),
-            sql`(${dmConversations.userA} = ${ctx.user.id} OR ${dmConversations.userB} = ${ctx.user.id})`,
-          ),
-        );
-
-      const otherUserIds = conversations.map((c) => (c.userA === ctx.user.id ? c.userB : c.userA));
-      const profiles = await resolveUserProfiles(d, otherUserIds);
-
-      return conversations.map((c) => {
-        const otherId = c.userA === ctx.user.id ? c.userB : c.userA;
-        const profile = profiles.get(otherId);
-        return {
-          user_id: otherId,
-          username: profile?.username ?? 'Unknown',
-          discriminator: profile?.discriminator ?? '0000',
-          display_name: profile?.display_name ?? null,
-          avatar_url: profile?.avatar_url ?? null,
-          last_message: null,
-          unread_count: 0,
-        };
-      });
-    }),
-  }),
 });

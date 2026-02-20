@@ -183,6 +183,21 @@ export const hubFilesRouter = router({
         .set({ name: input.name })
         .where(eq(sharedFolders.id, input.folder_id));
 
+      await insertAuditLog(d, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'shared_folder.update',
+        targetType: 'shared_folder',
+        targetId: input.folder_id,
+        details: { name: input.name, previous_name: folder.name },
+      });
+
+      eventDispatcher.dispatchToAll('shared_folder.update', {
+        id: input.folder_id,
+        name: input.name,
+        parent_id: folder.parentId,
+      });
+
       return { success: true };
     }),
 

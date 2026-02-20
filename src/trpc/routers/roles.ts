@@ -156,6 +156,15 @@ export const rolesRouter = router({
           .where(and(eq(roles.id, item.role_id), eq(roles.serverId, ctx.serverId)));
       }
 
+      await insertAuditLog(ctx.db, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'role.reorder',
+        targetType: 'role',
+        targetId: ctx.serverId,
+        details: { count: input.roles.length },
+      });
+
       const allRoles = await ctx.db
         .select()
         .from(roles)

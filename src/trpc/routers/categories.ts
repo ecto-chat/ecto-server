@@ -180,6 +180,15 @@ export const categoriesRouter = router({
           .where(and(eq(categories.id, item.category_id), eq(categories.serverId, ctx.serverId)));
       }
 
+      await insertAuditLog(ctx.db, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'category.reorder',
+        targetType: 'category',
+        targetId: ctx.serverId,
+        details: { count: input.categories.length },
+      });
+
       const allCategories = await ctx.db
         .select()
         .from(categories)

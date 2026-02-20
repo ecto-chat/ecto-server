@@ -4,6 +4,7 @@ import { serverConfig, servers } from '../../db/schema/index.js';
 import { eq } from 'drizzle-orm';
 import { Permissions } from 'ecto-shared';
 import { requirePermission } from '../../utils/permission-context.js';
+import { formatServer } from '../../utils/format.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
@@ -64,11 +65,11 @@ export const serverConfigRouter = router({
         details: { config: input },
       });
 
-      // Broadcast config changes that affect client UI
-      if (input.allow_member_dms !== undefined) {
-        eventDispatcher.dispatchToAll('server.update', {
-          allow_member_dms: input.allow_member_dms,
-        });
+      // Broadcast full server object so clients get consistent payloads
+      const [serverRow] = await ctx.db.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
+      const [updatedCfg] = await ctx.db.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
+      if (serverRow) {
+        eventDispatcher.dispatchToAll('server.update', formatServer(serverRow, updatedCfg));
       }
 
       return { success: true };
@@ -90,6 +91,22 @@ export const serverConfigRouter = router({
       .update(serverConfig)
       .set({ setupCompleted: true, updatedAt: new Date() })
       .where(eq(serverConfig.serverId, ctx.serverId));
+
+    await insertAuditLog(d, {
+      serverId: ctx.serverId,
+      actorId: ctx.user.id,
+      action: 'server.update',
+      targetType: 'server',
+      targetId: ctx.serverId,
+      details: { setup_completed: true },
+    });
+
+    // Broadcast full server object so clients see setup_completed: true
+    const [serverRow] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
+    const [updatedCfg] = await d.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
+    if (serverRow) {
+      eventDispatcher.dispatchToAll('server.update', formatServer(serverRow, updatedCfg));
+    }
 
     return { success: true };
   }),

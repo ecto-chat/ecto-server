@@ -1,7 +1,7 @@
 import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { readStates, channels, messages } from '../../db/schema/index.js';
-import { eq, and, desc, inArray, sql } from 'drizzle-orm';
+import { eq, and, inArray, sql } from 'drizzle-orm';
 import { requireMember } from '../../utils/permission-context.js';
 import { formatReadState } from '../../utils/format.js';
 
@@ -93,10 +93,17 @@ export const readStateRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
     await requireMember(ctx.db, ctx.serverId, ctx.user.id);
 
+    // Scope to channels belonging to this server
     const rows = await ctx.db
-      .select()
+      .select({
+        userId: readStates.userId,
+        channelId: readStates.channelId,
+        lastReadMessageId: readStates.lastReadMessageId,
+        mentionCount: readStates.mentionCount,
+      })
       .from(readStates)
-      .where(eq(readStates.userId, ctx.user.id));
+      .innerJoin(channels, eq(readStates.channelId, channels.id))
+      .where(and(eq(readStates.userId, ctx.user.id), eq(channels.serverId, ctx.serverId)));
 
     return rows.map(formatReadState);
   }),

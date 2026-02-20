@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
-import { messages, attachments, reactions, channels, members, readStates, serverConfig } from '../../db/schema/index.js';
+import { messages, attachments, reactions, channels, members, roles, memberRoles, readStates, serverConfig } from '../../db/schema/index.js';
 import { eq, and, lt, gt, desc, asc, inArray, sql } from 'drizzle-orm';
 import { generateUUIDv7, Permissions, parseMentions, MessageType, computePermissions, hasPermission } from 'ecto-shared';
 import { formatMessage, formatAttachment, formatMessageAuthor } from '../../utils/format.js';
@@ -124,6 +124,9 @@ export const messagesRouter = router({
         }
       }
 
+      // Collect user IDs that have already been notified (to avoid duplicates)
+      const notifiedUsers = new Set<string>();
+
       // Update mention counts for mentioned users
       if (parsed.users.length > 0) {
         for (const mentionedUserId of parsed.users) {
@@ -138,17 +141,84 @@ export const messagesRouter = router({
               target: [readStates.userId, readStates.channelId],
               set: { mentionCount: sql`${readStates.mentionCount} + 1` },
             });
+          notifiedUsers.add(mentionedUserId);
           // Send real-time notification (skip self-mentions)
           if (mentionedUserId !== ctx.user.id) {
-            // Main WS: user-targeted mention event (works even if user is on a different channel)
             eventDispatcher.dispatchToUser(mentionedUserId, 'mention.create', {
               channel_id: input.channel_id,
               message_id: id,
               author_id: ctx.user.id,
               content: input.content ?? '',
             });
-            // Notify WS: for background servers
             sendNotification(mentionedUserId, input.channel_id, 'mention');
+          }
+        }
+      }
+
+      // @everyone mention notifications
+      if (parsed.mentionEveryone) {
+        // Check MENTION_EVERYONE permission
+        const permCtx = await buildPermissionContext(d, ctx.serverId, ctx.user.id, input.channel_id);
+        const effective = computePermissions(permCtx);
+        if (hasPermission(effective, Permissions.MENTION_EVERYONE)) {
+          const allMembers = await d
+            .select({ userId: members.userId })
+            .from(members)
+            .where(eq(members.serverId, ctx.serverId));
+
+          for (const m of allMembers) {
+            if (m.userId === ctx.user.id || notifiedUsers.has(m.userId)) continue;
+            notifiedUsers.add(m.userId);
+            await d
+              .insert(readStates)
+              .values({ userId: m.userId, channelId: input.channel_id, mentionCount: 1 })
+              .onConflictDoUpdate({
+                target: [readStates.userId, readStates.channelId],
+                set: { mentionCount: sql`${readStates.mentionCount} + 1` },
+              });
+            eventDispatcher.dispatchToUser(m.userId, 'mention.create', {
+              channel_id: input.channel_id,
+              message_id: id,
+              author_id: ctx.user.id,
+              content: input.content ?? '',
+            });
+            sendNotification(m.userId, input.channel_id, 'mention');
+          }
+        }
+      }
+
+      // Role mention notifications
+      if (parsed.roles.length > 0) {
+        // Get members who have any of the mentioned roles
+        const roleMemberRows = await d
+          .select({ memberId: memberRoles.memberId, roleId: memberRoles.roleId })
+          .from(memberRoles)
+          .where(inArray(memberRoles.roleId, parsed.roles));
+
+        if (roleMemberRows.length > 0) {
+          const memberIds = [...new Set(roleMemberRows.map((r) => r.memberId))];
+          const memberRows = await d
+            .select({ id: members.id, userId: members.userId })
+            .from(members)
+            .where(inArray(members.id, memberIds));
+
+          for (const m of memberRows) {
+            if (m.userId === ctx.user.id || notifiedUsers.has(m.userId)) continue;
+            notifiedUsers.add(m.userId);
+            await d
+              .insert(readStates)
+              .values({ userId: m.userId, channelId: input.channel_id, mentionCount: 1 })
+              .onConflictDoUpdate({
+                target: [readStates.userId, readStates.channelId],
+                set: { mentionCount: sql`${readStates.mentionCount} + 1` },
+              });
+            eventDispatcher.dispatchToUser(m.userId, 'mention.create', {
+              channel_id: input.channel_id,
+              message_id: id,
+              author_id: ctx.user.id,
+              content: input.content ?? '',
+            });
+            sendNotification(m.userId, input.channel_id, 'mention');
           }
         }
       }

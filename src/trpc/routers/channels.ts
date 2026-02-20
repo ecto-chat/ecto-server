@@ -8,6 +8,8 @@ import { requirePermission, requireMember, buildBatchPermissionContext } from '.
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
+import { voiceStateManager } from '../../services/voice-state.js';
+import { cleanupVoiceState } from '../../utils/voice-cleanup.js';
 
 export const channelsRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -237,6 +239,12 @@ export const channelsRouter = router({
 
       if (!ch) throw ectoError('NOT_FOUND', 3000, 'Channel not found');
 
+      // Clean up voice states for users in this channel before deletion
+      const voiceUsers = voiceStateManager.getByChannel(input.channel_id);
+      for (const state of voiceUsers) {
+        cleanupVoiceState(state.userId);
+      }
+
       await ctx.db.delete(channels).where(eq(channels.id, input.channel_id));
 
       await insertAuditLog(ctx.db, {
@@ -291,6 +299,15 @@ export const channelsRouter = router({
         if (item.category_id !== undefined) updates['categoryId'] = item.category_id;
         await d.update(channels).set(updates).where(and(eq(channels.id, item.channel_id), eq(channels.serverId, ctx.serverId)));
       }
+
+      await insertAuditLog(d, {
+        serverId: ctx.serverId,
+        actorId: ctx.user.id,
+        action: 'channel.reorder',
+        targetType: 'channel',
+        targetId: ctx.serverId,
+        details: { count: input.channels.length },
+      });
 
       const allChannels = await d
         .select()
