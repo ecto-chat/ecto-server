@@ -13,8 +13,9 @@ import {
   readStates,
   memberRoles,
   serverConfig,
+  dmConversations,
 } from '../db/schema/index.js';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, or, inArray } from 'drizzle-orm';
 import { formatServer, formatChannel, formatCategory, formatRole, formatMember, formatReadState, formatVoiceState } from '../utils/format.js';
 import { resolveUserProfiles } from '../utils/resolve-profile.js';
 import { presenceManager } from '../services/presence.js';
@@ -24,7 +25,7 @@ import { computePermissions, hasPermission, Permissions } from 'ecto-shared';
 import { rateLimiter } from '../middleware/rate-limit.js';
 import { handleVoiceMessage } from './handlers/voice.js';
 import { cleanupVoiceState } from '../utils/voice-cleanup.js';
-import { wsMessageSchema, identifySchema, resumeSchema, channelSubSchema, typingSchema, presenceSchema } from './schemas.js';
+import { wsMessageSchema, identifySchema, resumeSchema, channelSubSchema, typingSchema, presenceSchema, serverDmTypingSchema } from './schemas.js';
 
 const HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL + 5000;
 
@@ -294,6 +295,42 @@ export function setupMainWebSocket(): WebSocketServer {
               custom_text: presData.custom_text ?? null,
               last_active_at: new Date().toISOString(),
             });
+          }
+          break;
+        }
+
+        case 'server_dm.typing': {
+          const dmTypingResult = serverDmTypingSchema.safeParse(msg.data);
+          if (dmTypingResult.success) {
+            const { conversation_id } = dmTypingResult.data;
+            if (rateLimiter.check(`dm_typing:${session.userId}:${conversation_id}`, 1, 3000)) {
+              const d = db();
+              const [server] = await d.select().from(servers).limit(1);
+              if (server) {
+                const [convo] = await d
+                  .select()
+                  .from(dmConversations)
+                  .where(
+                    and(
+                      eq(dmConversations.id, conversation_id),
+                      eq(dmConversations.serverId, server.id),
+                      or(
+                        eq(dmConversations.userA, session.userId),
+                        eq(dmConversations.userB, session.userId),
+                      ),
+                    ),
+                  )
+                  .limit(1);
+                if (convo) {
+                  const peerId = convo.userA === session.userId ? convo.userB : convo.userA;
+                  eventDispatcher.dispatchToUser(peerId, 'server_dm.typing', {
+                    conversation_id,
+                    user_id: session.userId,
+                    timestamp: new Date().toISOString(),
+                  });
+                }
+              }
+            }
           }
           break;
         }

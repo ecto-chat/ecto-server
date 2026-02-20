@@ -37,7 +37,7 @@ export function formatServer(
     adminUserId: string | null;
     defaultChannelId: string | null;
   },
-  config?: { setupCompleted: boolean },
+  config?: { setupCompleted: boolean; allowMemberDms?: boolean },
 ): Server {
   return {
     id: row.id,
@@ -50,6 +50,7 @@ export function formatServer(
     setup_completed: config?.setupCompleted ?? true,
     admin_user_id: row.adminUserId,
     default_channel_id: row.defaultChannelId ?? null,
+    allow_member_dms: config?.allowMemberDms ?? false,
   };
 }
 

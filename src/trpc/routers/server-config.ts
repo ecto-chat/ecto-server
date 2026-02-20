@@ -6,6 +6,7 @@ import { Permissions } from 'ecto-shared';
 import { requirePermission } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
+import { eventDispatcher } from '../../ws/event-dispatcher.js';
 
 export const serverConfigRouter = router({
   get: protectedProcedure.query(async ({ ctx }) => {
@@ -62,6 +63,13 @@ export const serverConfigRouter = router({
         targetId: ctx.serverId,
         details: { config: input },
       });
+
+      // Broadcast config changes that affect client UI
+      if (input.allow_member_dms !== undefined) {
+        eventDispatcher.dispatchToAll('server.update', {
+          allow_member_dms: input.allow_member_dms,
+        });
+      }
 
       return { success: true };
     }),

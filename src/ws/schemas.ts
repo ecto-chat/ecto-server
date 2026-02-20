@@ -29,6 +29,11 @@ export const typingSchema = z.object({
   channel_id: z.string().uuid(),
 });
 
+/** server_dm.typing payload */
+export const serverDmTypingSchema = z.object({
+  conversation_id: z.string().uuid(),
+});
+
 /** presence.update payload */
 export const presenceSchema = z.object({
   status: z.enum(['online', 'idle', 'dnd', 'offline']),
