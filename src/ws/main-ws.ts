@@ -27,7 +27,11 @@ import { handleVoiceMessage } from './handlers/voice.js';
 import { cleanupVoiceState } from '../utils/voice-cleanup.js';
 import { wsMessageSchema, identifySchema, resumeSchema, channelSubSchema, typingSchema, presenceSchema, serverDmTypingSchema } from './schemas.js';
 
-const HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL + 5000;
+const HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 3; // 90s — generous for browser tab throttling
+const OFFLINE_GRACE_PERIOD = 15_000; // 15s — delay before broadcasting offline to allow reconnect
+
+/** Pending offline broadcast timers, keyed by userId. Cleared when user reconnects within grace period. */
+const offlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 interface PendingSession {
   ws: WebSocket;
@@ -58,6 +62,7 @@ export function setupMainWebSocket(): WebSocketServer {
 
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     let voiceMessageQueue: Promise<void> = Promise.resolve();
+    let userId: string | null = null;
 
     ws.on('message', async (raw) => {
       const parsed = wsMessageSchema.safeParse((() => { try { return JSON.parse(raw.toString()); } catch { return null; } })());
@@ -108,6 +113,14 @@ export function setupMainWebSocket(): WebSocketServer {
           clearTimeout(identifyTimeout);
 
           const session = eventDispatcher.addSession(sessionId, user.id, ws);
+          userId = user.id;
+
+          // Cancel any pending offline timer from a previous session
+          const pendingTimer = offlineTimers.get(user.id);
+          if (pendingTimer) {
+            clearTimeout(pendingTimer);
+            offlineTimers.delete(user.id);
+          }
 
           // Set user online
           presenceManager.update(user.id, 'online', null);
@@ -186,6 +199,14 @@ export function setupMainWebSocket(): WebSocketServer {
             },
           };
           ws.send(JSON.stringify(ready));
+
+          // Broadcast online status to all other users
+          eventDispatcher.dispatchToAll('presence.update', {
+            user_id: user.id,
+            status: 'online',
+            custom_text: null,
+            last_active_at: new Date().toISOString(),
+          });
 
           // Start heartbeat check
           heartbeatTimer = setInterval(() => {
@@ -353,21 +374,31 @@ export function setupMainWebSocket(): WebSocketServer {
 
       const session = eventDispatcher.getSession(sessionId);
       if (session) {
-        // Clean up voice state only if THIS session owns it
-        cleanupVoiceState(session.userId, sessionId);
+        const closingUserId = session.userId;
 
-        // Set offline if no other sessions
-        const otherSessions = eventDispatcher.getSessionsByUser(session.userId);
-        if (otherSessions.length <= 1) {
-          presenceManager.remove(session.userId);
-          eventDispatcher.dispatchToAll('presence.update', {
-            user_id: session.userId,
-            status: 'offline',
-            custom_text: null,
-            last_active_at: new Date().toISOString(),
-          });
-        }
+        // Clean up voice state only if THIS session owns it
+        cleanupVoiceState(closingUserId, sessionId);
+
+        // Remove session immediately so the new connection can take over
         eventDispatcher.removeSession(sessionId);
+
+        // Delay offline broadcast to allow reconnection
+        const remainingSessions = eventDispatcher.getSessionsByUser(closingUserId);
+        if (remainingSessions.length === 0) {
+          offlineTimers.set(closingUserId, setTimeout(() => {
+            offlineTimers.delete(closingUserId);
+            // Re-check after grace period — user may have reconnected
+            if (eventDispatcher.getSessionsByUser(closingUserId).length === 0) {
+              presenceManager.remove(closingUserId);
+              eventDispatcher.dispatchToAll('presence.update', {
+                user_id: closingUserId,
+                status: 'offline',
+                custom_text: null,
+                last_active_at: new Date().toISOString(),
+              });
+            }
+          }, OFFLINE_GRACE_PERIOD));
+        }
       }
     });
 
