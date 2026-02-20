@@ -104,6 +104,15 @@ export const messagesRouter = router({
       // Parse mentions
       const parsed = input.content ? parseMentions(input.content) : { users: [], roles: [], channels: [], mentionEveryone: false };
 
+      // Only mark @everyone / role mentions as effective if user has MENTION_EVERYONE permission.
+      // Without permission, the raw text stays in content but flags are false — client renders as plain text.
+      let canMentionEveryone = false;
+      if (parsed.mentionEveryone || parsed.roles.length > 0) {
+        const permCtx = await buildPermissionContext(d, ctx.serverId, ctx.user.id, input.channel_id);
+        const effective = computePermissions(permCtx);
+        canMentionEveryone = hasPermission(effective, Permissions.MENTION_EVERYONE);
+      }
+
       const id = generateUUIDv7();
       await d.insert(messages).values({
         id,
@@ -112,8 +121,8 @@ export const messagesRouter = router({
         content: input.content ?? null,
         type: MessageType.DEFAULT,
         replyTo: input.reply_to ?? null,
-        mentionEveryone: parsed.mentionEveryone,
-        mentionRoles: parsed.roles.length > 0 ? parsed.roles : null,
+        mentionEveryone: canMentionEveryone && parsed.mentionEveryone,
+        mentionRoles: canMentionEveryone && parsed.roles.length > 0 ? parsed.roles : null,
         mentionUsers: parsed.users.length > 0 ? parsed.users : null,
       });
 
@@ -155,40 +164,35 @@ export const messagesRouter = router({
         }
       }
 
-      // @everyone mention notifications
-      if (parsed.mentionEveryone) {
-        // Check MENTION_EVERYONE permission
-        const permCtx = await buildPermissionContext(d, ctx.serverId, ctx.user.id, input.channel_id);
-        const effective = computePermissions(permCtx);
-        if (hasPermission(effective, Permissions.MENTION_EVERYONE)) {
-          const allMembers = await d
-            .select({ userId: members.userId })
-            .from(members)
-            .where(eq(members.serverId, ctx.serverId));
+      // @everyone mention notifications (permission already checked above)
+      if (canMentionEveryone && parsed.mentionEveryone) {
+        const allMembers = await d
+          .select({ userId: members.userId })
+          .from(members)
+          .where(eq(members.serverId, ctx.serverId));
 
-          for (const m of allMembers) {
-            if (m.userId === ctx.user.id || notifiedUsers.has(m.userId)) continue;
-            notifiedUsers.add(m.userId);
-            await d
-              .insert(readStates)
-              .values({ userId: m.userId, channelId: input.channel_id, mentionCount: 1 })
-              .onConflictDoUpdate({
-                target: [readStates.userId, readStates.channelId],
-                set: { mentionCount: sql`${readStates.mentionCount} + 1` },
-              });
-            eventDispatcher.dispatchToUser(m.userId, 'mention.create', {
-              channel_id: input.channel_id,
-              message_id: id,
-              author_id: ctx.user.id,
-              content: input.content ?? '',
+        for (const m of allMembers) {
+          if (m.userId === ctx.user.id || notifiedUsers.has(m.userId)) continue;
+          notifiedUsers.add(m.userId);
+          await d
+            .insert(readStates)
+            .values({ userId: m.userId, channelId: input.channel_id, mentionCount: 1 })
+            .onConflictDoUpdate({
+              target: [readStates.userId, readStates.channelId],
+              set: { mentionCount: sql`${readStates.mentionCount} + 1` },
             });
-            sendNotification(m.userId, input.channel_id, 'mention');
-          }
+          eventDispatcher.dispatchToUser(m.userId, 'mention.create', {
+            channel_id: input.channel_id,
+            message_id: id,
+            author_id: ctx.user.id,
+            content: input.content ?? '',
+          });
+          sendNotification(m.userId, input.channel_id, 'mention');
         }
       }
 
-      // Role mention notifications
-      if (parsed.roles.length > 0) {
+      // Role mention notifications (permission already checked above)
+      if (canMentionEveryone && parsed.roles.length > 0) {
         // Get members who have any of the mentioned roles
         const roleMemberRows = await d
           .select({ memberId: memberRoles.memberId, roleId: memberRoles.roleId })
