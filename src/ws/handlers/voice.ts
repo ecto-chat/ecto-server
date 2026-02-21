@@ -129,6 +129,16 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
 
       // Broadcast state update
       eventDispatcher.dispatchToAll('voice.state_update', formatVoiceState(state));
+
+      // Send existing channel participants to the joining user so they know who's already here
+      const channelStates = voiceStateManager.getByChannel(channelId);
+      for (const existing of channelStates) {
+        if (existing.userId === session.userId) continue;
+        session.ws.send(JSON.stringify({
+          event: 'voice.state_update',
+          data: formatVoiceState(existing),
+        }));
+      }
       break;
     }
 
