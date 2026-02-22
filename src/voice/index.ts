@@ -65,14 +65,53 @@ interface UserTransports {
   recv: mediasoupTypes.WebRtcTransport;
 }
 
-interface ProducerInfo {
+export interface ProducerInfo {
   producerId: string;
   userId: string;
-  kind: mediasoupTypes.MediaKind;
+  kind: 'audio' | 'video';
   source: string;
 }
 
-class VoiceManager {
+/** Transport parameters returned to clients */
+export interface TransportInfo {
+  id: string;
+  iceParameters: object;
+  iceCandidates: object[];
+  dtlsParameters: object;
+}
+
+/** Consumer creation result */
+export interface ConsumerInfo {
+  consumerId: string;
+  producerId: string;
+  kind: 'audio' | 'video';
+  rtpParameters: object;
+  paused: boolean;
+}
+
+/** Interface for voice/media management — gateway can swap with RPC implementation */
+export interface IVoiceManager {
+  initialize(): Promise<void>;
+  getOrCreateRouter(channelId: string): Promise<{ rtpCapabilities: object }>;
+  getRouter(channelId: string): { rtpCapabilities: object } | undefined;
+  setDeviceCapabilities(userId: string, rtpCapabilities: object, channelId?: string): void;
+  getDeviceCapabilities(userId: string): object | undefined;
+  createTransports(channelId: string, userId: string): Promise<{ send: TransportInfo; recv: TransportInfo }>;
+  connectTransport(transportId: string, dtlsParameters: object): Promise<void>;
+  createProducer(transportId: string, kind: 'audio' | 'video', rtpParameters: object, source?: string): Promise<{ id: string }>;
+  createConsumer(channelId: string, consumerUserId: string, producerId: string, rtpCapabilities: object): Promise<ConsumerInfo | null>;
+  resumeConsumer(consumerId: string): Promise<void>;
+  setConsumerQuality(consumerId: string, spatialLayer?: number, temporalLayer?: number): Promise<void>;
+  getProducersInChannel(channelId: string, excludeUserId?: string): Promise<ProducerInfo[]>;
+  getUserProducers(userId: string): Array<{ id: string; kind: 'audio' | 'video' }>;
+  closeProducer(producerId: string): void;
+  pauseProducer(producerId: string): void;
+  resumeProducer(producerId: string): void;
+  leaveChannel(userId: string, channelId?: string): Promise<void>;
+  close(): void;
+}
+
+class LocalVoiceManager implements IVoiceManager {
   private workers: mediasoupTypes.Worker[] = [];
   private nextWorkerIdx = 0;
   // worker → WebRtcServer (one per worker, single port, ICE mux)
@@ -162,15 +201,15 @@ class VoiceManager {
   // router → worker (to look up WebRtcServer)
   private routerWorker = new Map<mediasoupTypes.Router, mediasoupTypes.Worker>();
 
-  async getOrCreateRouter(channelId: string): Promise<mediasoupTypes.Router> {
+  async getOrCreateRouter(channelId: string): Promise<{ rtpCapabilities: object }> {
     const existing = this.routers.get(channelId);
-    if (existing && !existing.closed) return existing;
+    if (existing && !existing.closed) return { rtpCapabilities: existing.rtpCapabilities };
 
     const worker = this.getNextWorker();
     const router = await worker.createRouter({ mediaCodecs: MEDIA_CODECS });
     this.routers.set(channelId, router);
     this.routerWorker.set(router, worker);
-    return router;
+    return { rtpCapabilities: router.rtpCapabilities };
   }
 
   private getWebRtcServerForRouter(router: mediasoupTypes.Router): mediasoupTypes.WebRtcServer {
@@ -181,19 +220,21 @@ class VoiceManager {
     return server;
   }
 
-  getRouter(channelId: string): mediasoupTypes.Router | undefined {
-    return this.routers.get(channelId);
+  getRouter(channelId: string): { rtpCapabilities: object } | undefined {
+    const router = this.routers.get(channelId);
+    if (!router || router.closed) return undefined;
+    return { rtpCapabilities: router.rtpCapabilities };
   }
 
-  setDeviceCapabilities(userId: string, rtpCapabilities: mediasoupTypes.RtpCapabilities): void {
-    this.deviceCapabilities.set(userId, rtpCapabilities);
+  setDeviceCapabilities(userId: string, rtpCapabilities: object, _channelId?: string): void {
+    this.deviceCapabilities.set(userId, rtpCapabilities as mediasoupTypes.RtpCapabilities);
   }
 
-  getDeviceCapabilities(userId: string): mediasoupTypes.RtpCapabilities | undefined {
+  getDeviceCapabilities(userId: string): object | undefined {
     return this.deviceCapabilities.get(userId);
   }
 
-  async createTransports(channelId: string, userId: string): Promise<UserTransports> {
+  async createTransports(channelId: string, userId: string): Promise<{ send: TransportInfo; recv: TransportInfo }> {
     const router = this.routers.get(channelId);
     if (!router || router.closed) throw new Error('No router for channel');
 
@@ -227,10 +268,17 @@ class VoiceManager {
     }
     users.add(userId);
 
-    return userTransports;
+    const toInfo = (t: mediasoupTypes.WebRtcTransport): TransportInfo => ({
+      id: t.id,
+      iceParameters: t.iceParameters,
+      iceCandidates: t.iceCandidates,
+      dtlsParameters: t.dtlsParameters,
+    });
+
+    return { send: toInfo(sendTransport), recv: toInfo(recvTransport) };
   }
 
-  async connectTransport(transportId: string, dtlsParameters: unknown): Promise<void> {
+  async connectTransport(transportId: string, dtlsParameters: object): Promise<void> {
     const transport = this.transportById.get(transportId);
     if (!transport || transport.closed) return;
     try {
@@ -244,10 +292,10 @@ class VoiceManager {
 
   async createProducer(
     transportId: string,
-    kind: mediasoupTypes.MediaKind,
-    rtpParameters: unknown,
+    kind: 'audio' | 'video',
+    rtpParameters: object,
     source?: string,
-  ): Promise<mediasoupTypes.Producer> {
+  ): Promise<{ id: string }> {
     const transport = this.transportById.get(transportId);
     if (!transport || transport.closed) throw new Error('Transport not found or closed');
 
@@ -269,19 +317,19 @@ class VoiceManager {
       this.producerMeta.delete(producer.id);
     });
 
-    return producer;
+    return { id: producer.id };
   }
 
   async createConsumer(
     channelId: string,
     consumerUserId: string,
     producerId: string,
-    rtpCapabilities: mediasoupTypes.RtpCapabilities,
-  ): Promise<mediasoupTypes.Consumer | null> {
+    rtpCapabilities: object,
+  ): Promise<ConsumerInfo | null> {
     const router = this.routers.get(channelId);
     if (!router || router.closed) return null;
 
-    if (!router.canConsume({ producerId, rtpCapabilities })) return null;
+    if (!router.canConsume({ producerId, rtpCapabilities: rtpCapabilities as mediasoupTypes.RtpCapabilities })) return null;
 
     const key = `${channelId}:${consumerUserId}`;
     const userTransport = this.transports.get(key);
@@ -292,7 +340,7 @@ class VoiceManager {
 
     const consumer = await recvTransport.consume({
       producerId,
-      rtpCapabilities,
+      rtpCapabilities: rtpCapabilities as mediasoupTypes.RtpCapabilities,
       paused: true, // Start paused, client resumes after setup
     });
 
@@ -323,7 +371,13 @@ class VoiceManager {
       }
     });
 
-    return consumer;
+    return {
+      consumerId: consumer.id,
+      producerId: consumer.producerId,
+      kind: consumer.kind as 'audio' | 'video',
+      rtpParameters: consumer.rtpParameters,
+      paused: consumer.producerPaused,
+    };
   }
 
   async resumeConsumer(consumerId: string): Promise<void> {
@@ -356,7 +410,7 @@ class VoiceManager {
     });
   }
 
-  getProducersInChannel(channelId: string, excludeUserId?: string): ProducerInfo[] {
+  async getProducersInChannel(channelId: string, excludeUserId?: string): Promise<ProducerInfo[]> {
     const result: ProducerInfo[] = [];
     for (const [producerId, meta] of this.producerMeta) {
       if (meta.channelId !== channelId) continue;
@@ -366,7 +420,7 @@ class VoiceManager {
         result.push({
           producerId,
           userId: meta.userId,
-          kind: producer.kind,
+          kind: producer.kind as 'audio' | 'video',
           source: meta.source,
         });
       }
@@ -374,13 +428,13 @@ class VoiceManager {
     return result;
   }
 
-  getUserProducers(userId: string): Array<{ id: string; kind: mediasoupTypes.MediaKind }> {
-    const result: Array<{ id: string; kind: mediasoupTypes.MediaKind }> = [];
+  getUserProducers(userId: string): Array<{ id: string; kind: 'audio' | 'video' }> {
+    const result: Array<{ id: string; kind: 'audio' | 'video' }> = [];
     for (const [producerId, meta] of this.producerMeta) {
       if (meta.userId !== userId) continue;
       const producer = this.producerById.get(producerId);
       if (producer && !producer.closed) {
-        result.push({ id: producer.id, kind: producer.kind });
+        result.push({ id: producer.id, kind: producer.kind as 'audio' | 'video' });
       }
     }
     return result;
@@ -409,7 +463,7 @@ class VoiceManager {
     }
   }
 
-  async leaveChannel(userId: string): Promise<void> {
+  async leaveChannel(userId: string, _channelId?: string): Promise<void> {
     // Find all channels the user is in and clean up
     for (const [key, userTransports] of this.transports) {
       if (!key.endsWith(`:${userId}`)) continue;
@@ -486,4 +540,14 @@ class VoiceManager {
   }
 }
 
-export const voiceManager = new VoiceManager();
+let _voiceManager: IVoiceManager = new LocalVoiceManager();
+
+export function setVoiceManager(impl: IVoiceManager) {
+  _voiceManager = impl;
+}
+
+export const voiceManager: IVoiceManager = new Proxy({} as IVoiceManager, {
+  get(_target, prop) {
+    return (_voiceManager as any)[prop];
+  },
+});

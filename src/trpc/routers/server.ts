@@ -374,9 +374,7 @@ export const serverRouter = router({
       await d.delete(servers).where(eq(servers.id, ctx.serverId));
 
       // Disconnect all clients
-      for (const session of eventDispatcher.sessions.values()) {
-        session.ws.close(WsCloseCode.SERVER_SHUTTING_DOWN, 'Server deleted');
-      }
+      eventDispatcher.disconnectAll(WsCloseCode.SERVER_SHUTTING_DOWN, 'Server deleted');
 
       return { success: true };
     }),

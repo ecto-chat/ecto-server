@@ -13,7 +13,7 @@ export function cleanupVoiceState(userId: string, sessionId?: string) {
   if (sessionId && voiceState.sessionId !== sessionId) return;
 
   voiceStateManager.leave(userId);
-  voiceManager.leaveChannel(userId).catch(() => {});
+  voiceManager.leaveChannel(userId, voiceState.channelId).catch(() => {});
   eventDispatcher.dispatchToAll('voice.state_update', {
     ...formatVoiceState(voiceState),
     _removed: true,

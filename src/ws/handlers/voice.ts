@@ -8,7 +8,7 @@ import { formatVoiceState } from '../../utils/format.js';
 import { buildPermissionContext } from '../../utils/permission-context.js';
 import { computePermissions, hasPermission } from 'ecto-shared';
 import { db } from '../../db/index.js';
-import { servers, channels } from '../../db/schema/index.js';
+import { channels } from '../../db/schema/index.js';
 import { eq, and } from 'drizzle-orm';
 import { voiceJoinSchema, voiceConnectSchema, voiceCapabilitiesSchema, voiceProduceSchema, voiceProducerIdSchema, voiceConsumerIdSchema, voiceMuteSchema, voiceQualitySchema } from '../schemas.js';
 
@@ -20,14 +20,14 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       const channelId = joinResult.data.channel_id;
 
       const d = db();
-      const [server] = await d.select().from(servers).limit(1);
-      if (!server) return;
+      const sid = session.serverId;
+      if (!sid) return;
 
       // Check channel exists and is voice
       const [channel] = await d
         .select()
         .from(channels)
-        .where(and(eq(channels.id, channelId), eq(channels.serverId, server.id)))
+        .where(and(eq(channels.id, channelId), eq(channels.serverId, sid)))
         .limit(1);
       if (!channel || channel.type !== 'voice') {
         session.ws.send(JSON.stringify({ event: 'voice.error', data: { code: 3002, message: 'Cannot connect to this channel' } }));
@@ -35,7 +35,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       }
 
       // Check CONNECT_VOICE permission
-      const permCtx = await buildPermissionContext(d, server.id, session.userId, channelId);
+      const permCtx = await buildPermissionContext(d, sid, session.userId, channelId);
       if (!hasPermission(computePermissions(permCtx), Permissions.CONNECT_VOICE)) {
         session.ws.send(JSON.stringify({ event: 'voice.error', data: { code: 5001, message: 'Insufficient permissions' } }));
         return;
@@ -71,7 +71,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
 
         // Force: leave current channel
         voiceStateManager.leave(session.userId);
-        await voiceManager.leaveChannel(session.userId);
+        await voiceManager.leaveChannel(session.userId, existing.channelId);
         eventDispatcher.dispatchToAll('voice.state_update', {
           ...formatVoiceState(existing),
           _removed: true,
@@ -145,7 +145,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
     case 'voice.leave': {
       const state = voiceStateManager.leave(session.userId);
       if (state) {
-        await voiceManager.leaveChannel(session.userId);
+        await voiceManager.leaveChannel(session.userId, state.channelId);
         eventDispatcher.dispatchToAll('voice.state_update', {
           ...formatVoiceState(state),
           _removed: true,
@@ -165,14 +165,15 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
     case 'voice.capabilities': {
       const capsResult = voiceCapabilitiesSchema.safeParse(msg.data);
       if (!capsResult.success) break;
-      const rtpCapabilities = capsResult.data.rtp_capabilities as import('mediasoup').types.RtpCapabilities;
-
-      voiceManager.setDeviceCapabilities(session.userId, rtpCapabilities);
+      const rtpCapabilities = capsResult.data.rtp_capabilities as object;
 
       // Now create consumers for existing producers using the client's real capabilities
       const voiceState = voiceStateManager.getByUser(session.userId);
+
+      voiceManager.setDeviceCapabilities(session.userId, rtpCapabilities, voiceState?.channelId);
+
       if (voiceState) {
-        const existingProducers = voiceManager.getProducersInChannel(voiceState.channelId, session.userId);
+        const existingProducers = await voiceManager.getProducersInChannel(voiceState.channelId, session.userId);
         for (const prod of existingProducers) {
           try {
             const consumer = await voiceManager.createConsumer(
@@ -183,7 +184,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
             );
             if (consumer) {
               eventDispatcher.dispatchToUser(session.userId, 'voice.new_consumer', {
-                consumer_id: consumer.id,
+                consumer_id: consumer.consumerId,
                 producer_id: prod.producerId,
                 user_id: prod.userId,
                 kind: consumer.kind,
@@ -208,9 +209,8 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
         const voiceState = voiceStateManager.getByUser(session.userId);
         if (voiceState) {
           const d = db();
-          const [server] = await d.select().from(servers).limit(1);
-          if (server) {
-            const permCtx = await buildPermissionContext(d, server.id, session.userId, voiceState.channelId);
+          if (session.serverId) {
+            const permCtx = await buildPermissionContext(d, session.serverId, session.userId, voiceState.channelId);
             const perms = computePermissions(permCtx);
             const resolvedSource = source ?? (kind === 'audio' ? 'mic' : 'camera');
 
@@ -230,7 +230,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
         }
 
         try {
-          const producer = await voiceManager.createProducer(transportId, kind, rtpParameters, source);
+          const producer = await voiceManager.createProducer(transportId, kind, rtpParameters as object, source);
           session.ws.send(JSON.stringify({
             event: 'voice.produced',
             data: { producer_id: producer.id },
@@ -253,7 +253,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
                 );
                 if (consumer) {
                   eventDispatcher.dispatchToUser(other.userId, 'voice.new_consumer', {
-                    consumer_id: consumer.id,
+                    consumer_id: consumer.consumerId,
                     producer_id: producer.id,
                     user_id: session.userId,
                     kind: consumer.kind,

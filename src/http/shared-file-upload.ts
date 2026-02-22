@@ -1,19 +1,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
 import { verifyToken } from '../middleware/auth.js';
 import { db } from '../db/index.js';
 import { sharedFiles, sharedFolders, serverConfig } from '../db/schema/index.js';
-import { config } from '../config/index.js';
 import { generateUUIDv7, Permissions, hasPermission } from 'ecto-shared';
 import { eq, and, sql } from 'drizzle-orm';
 import { requirePermission } from '../utils/permission-context.js';
 import { resolveSharedItemAccess } from '../utils/shared-permissions.js';
 import { parseMultipart } from './multipart.js';
-import { getServerId } from '../trpc/context.js';
+import { checkStorageQuota } from '../services/storage-quota.js';
+import { resolveServerId } from '../trpc/context.js';
 import { formatSharedFile } from '../utils/format.js';
 import { resolveUserProfiles } from '../utils/resolve-profile.js';
 import { eventDispatcher } from '../ws/event-dispatcher.js';
+import { fileStorage } from '../services/file-storage.js';
 
 export async function handleSharedFileUpload(req: IncomingMessage, res: ServerResponse) {
   try {
@@ -27,7 +26,7 @@ export async function handleSharedFileUpload(req: IncomingMessage, res: ServerRe
 
     const user = await verifyToken(authHeader.slice(7));
     const d = db();
-    const serverId = getServerId();
+    const serverId = await resolveServerId(req);
 
     // Parse multipart
     const contentType = req.headers['content-type'] ?? '';
@@ -96,20 +95,23 @@ export async function handleSharedFileUpload(req: IncomingMessage, res: ServerRe
 
     if ((usage?.usedBytes ?? 0) + file.data.length > maxStorage) {
       res.writeHead(413, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Storage quota exceeded' }));
+      res.end(JSON.stringify({ error: 'Shared storage quota exceeded' }));
       return;
     }
 
-    // Save to disk
+    // Check global server-wide storage quota (images exempt)
+    const quotaError = await checkStorageQuota(serverId, file.data.length, file.contentType);
+    if (quotaError) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: quotaError }));
+      return;
+    }
+
+    // Save via storage backend (local disk or S3)
     const fileId = generateUUIDv7();
     const folderPart = folderId ?? 'root';
-    const dir = path.join(config.UPLOAD_DIR, serverId, 'shared', folderPart, fileId);
-    await fs.promises.mkdir(dir, { recursive: true });
-    const filePath = path.join(dir, file.filename);
-    await fs.promises.writeFile(filePath, file.data);
-
-    // The URL uses the direct disk path pattern — file-serve.ts serves it automatically
-    const url = `/files/${serverId}/shared/${folderPart}/${fileId}/${encodeURIComponent(file.filename)}`;
+    const storageKey = `${serverId}/shared/${folderPart}/${fileId}/${file.filename}`;
+    const url = await fileStorage.save(storageKey, file.data, file.contentType);
 
     // Insert DB row
     const [row] = await d.insert(sharedFiles).values({

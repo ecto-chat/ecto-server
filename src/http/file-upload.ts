@@ -1,15 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
 import { verifyToken } from '../middleware/auth.js';
 import { db } from '../db/index.js';
 import { attachments, channels, serverConfig } from '../db/schema/index.js';
-import { config } from '../config/index.js';
 import { generateUUIDv7 } from 'ecto-shared';
 import { eq } from 'drizzle-orm';
 import { requirePermission } from '../utils/permission-context.js';
 import { Permissions } from 'ecto-shared';
 import { parseMultipart } from './multipart.js';
+import { checkStorageQuota } from '../services/storage-quota.js';
+import { fileStorage } from '../services/file-storage.js';
 
 export async function handleFileUpload(req: IncomingMessage, res: ServerResponse) {
   try {
@@ -71,15 +70,18 @@ export async function handleFileUpload(req: IncomingMessage, res: ServerResponse
       return;
     }
 
-    // Save to disk
-    const attachmentId = generateUUIDv7();
-    const dir = path.join(config.UPLOAD_DIR, channel.serverId, channelId, attachmentId);
-    await fs.promises.mkdir(dir, { recursive: true });
-    const filePath = path.join(dir, file.filename);
-    await fs.promises.writeFile(filePath, file.data);
+    // Check server-wide storage quota (images exempt)
+    const quotaError = await checkStorageQuota(channel.serverId, file.data.length, file.contentType);
+    if (quotaError) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: quotaError }));
+      return;
+    }
 
-    // Insert attachment row (message_id=null, linked when message sent)
-    const url = `/files/${attachmentId}/${encodeURIComponent(file.filename)}`;
+    // Save file via storage backend (local disk or S3)
+    const attachmentId = generateUUIDv7();
+    const storageKey = `${channel.serverId}/${channelId}/${attachmentId}/${file.filename}`;
+    const url = await fileStorage.save(storageKey, file.data, file.contentType);
     await d.insert(attachments).values({
       id: attachmentId,
       messageId: null,

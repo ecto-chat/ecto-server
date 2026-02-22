@@ -10,7 +10,17 @@ export interface VoiceStateData {
   connectedAt: string;
 }
 
-export class VoiceStateManager {
+export interface IVoiceStateManager {
+  join(userId: string, sessionId: string, channelId: string): VoiceStateData;
+  leave(userId: string): VoiceStateData | null;
+  updateMute(userId: string, updates: { selfMute?: boolean; selfDeaf?: boolean; serverMute?: boolean; serverDeaf?: boolean; videoEnabled?: boolean }): void;
+  getByUser(userId: string): VoiceStateData | null;
+  getByChannel(channelId: string): VoiceStateData[];
+  getAllStates(): VoiceStateData[];
+  getChannelUserCount(channelId: string): number;
+}
+
+export class MemoryVoiceStateManager implements IVoiceStateManager {
   private states = new Map<string, VoiceStateData>();
 
   join(userId: string, sessionId: string, channelId: string): VoiceStateData {
@@ -73,4 +83,14 @@ export class VoiceStateManager {
   }
 }
 
-export const voiceStateManager = new VoiceStateManager();
+let _voiceStateManager: IVoiceStateManager = new MemoryVoiceStateManager();
+
+export function setVoiceStateManager(impl: IVoiceStateManager) {
+  _voiceStateManager = impl;
+}
+
+export const voiceStateManager: IVoiceStateManager = new Proxy({} as IVoiceStateManager, {
+  get(_target, prop) {
+    return (_voiceStateManager as any)[prop];
+  },
+});

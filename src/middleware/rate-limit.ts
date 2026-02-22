@@ -1,9 +1,13 @@
+export interface IRateLimiter {
+  check(key: string, limit: number, windowMs: number): boolean;
+}
+
 interface Bucket {
   tokens: number;
   lastRefill: number;
 }
 
-export class RateLimiter {
+export class MemoryRateLimiter implements IRateLimiter {
   private buckets = new Map<string, Bucket>();
   private cleanupInterval: ReturnType<typeof setInterval>;
 
@@ -50,4 +54,14 @@ export class RateLimiter {
   }
 }
 
-export const rateLimiter = new RateLimiter();
+let _rateLimiter: IRateLimiter = new MemoryRateLimiter();
+
+export function setRateLimiter(impl: IRateLimiter) {
+  _rateLimiter = impl;
+}
+
+export const rateLimiter: IRateLimiter = new Proxy({} as IRateLimiter, {
+  get(_target, prop) {
+    return (_rateLimiter as any)[prop];
+  },
+});

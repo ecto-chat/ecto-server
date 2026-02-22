@@ -3,6 +3,28 @@
   "version": "0.1.0",
   "description": "Self-hostable Ecto community server",
   "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./services": "./dist/services/container.js",
+    "./interfaces": {
+      "import": "./dist/services/container.js",
+      "types": "./dist/services/container.d.ts"
+    },
+    "./services/presence": "./dist/services/presence.js",
+    "./services/voice-state": "./dist/services/voice-state.js",
+    "./ws/event-dispatcher": "./dist/ws/event-dispatcher.js",
+    "./voice": "./dist/voice/index.js",
+    "./middleware/rate-limit": "./dist/middleware/rate-limit.js",
+    "./middleware/auth": "./dist/middleware/auth.js",
+    "./config": "./dist/config/index.js",
+    "./db": "./dist/db/index.js",
+    "./db/schema": "./dist/db/schema/index.js",
+    "./http/server": "./dist/http/server.js",
+    "./trpc/router": "./dist/trpc/router.js",
+    "./trpc/context": "./dist/trpc/context.js",
+    "./services/file-storage": "./dist/services/file-storage.js",
+    "./utils/*": "./dist/utils/*.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",

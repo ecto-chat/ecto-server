@@ -1,17 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
 import { verifyToken } from '../middleware/auth.js';
 import { db } from '../db/index.js';
 import { servers, channels, pageContents } from '../db/schema/index.js';
-import { config } from '../config/index.js';
 import { generateUUIDv7 } from 'ecto-shared';
 import { eq, and } from 'drizzle-orm';
-import { getServerId } from '../trpc/context.js';
+import { resolveServerId } from '../trpc/context.js';
 import { requirePermission } from '../utils/permission-context.js';
 import { Permissions } from 'ecto-shared';
 import { parseMultipart } from './multipart.js';
 import { eventDispatcher } from '../ws/event-dispatcher.js';
+import { fileStorage } from '../services/file-storage.js';
 
 export async function handleBannerUpload(req: IncomingMessage, res: ServerResponse) {
   try {
@@ -24,7 +22,7 @@ export async function handleBannerUpload(req: IncomingMessage, res: ServerRespon
 
     const user = await verifyToken(authHeader.slice(7));
     const d = db();
-    const serverId = getServerId();
+    const serverId = await resolveServerId(req);
 
     await requirePermission(d, serverId, user.id, Permissions.MANAGE_SERVER);
 
@@ -57,15 +55,15 @@ export async function handleBannerUpload(req: IncomingMessage, res: ServerRespon
     }
 
     const bannerId = generateUUIDv7();
-    const ext = path.extname(file.filename) || '.png';
+    const ext = file.filename.includes('.') ? file.filename.slice(file.filename.lastIndexOf('.')) : '.png';
     const bannerFilename = `banner-${bannerId}${ext}`;
-    const dir = path.join(config.UPLOAD_DIR, serverId, 'banners');
-    await fs.promises.mkdir(dir, { recursive: true });
-    await fs.promises.writeFile(path.join(dir, bannerFilename), file.data);
+    const storageKey = `${serverId}/banners/${bannerFilename}`;
+    const savedUrl = await fileStorage.save(storageKey, file.data, file.contentType);
 
-    const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-    const baseUrl = `${proto}://${req.headers.host ?? `localhost:${config.PORT}`}`;
-    const bannerUrl = `${baseUrl}/files/${serverId}/banners/${bannerFilename}`;
+    // If storage returns a relative URL, make it absolute for the DB
+    const bannerUrl = savedUrl.startsWith('http')
+      ? savedUrl
+      : `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host ?? 'localhost'}${savedUrl}`;
 
     await d.update(servers).set({ bannerUrl, updatedAt: new Date() }).where(eq(servers.id, serverId));
 
@@ -89,7 +87,7 @@ export async function handlePageBannerUpload(req: IncomingMessage, res: ServerRe
 
     const user = await verifyToken(authHeader.slice(7));
     const d = db();
-    const serverId = getServerId();
+    const serverId = await resolveServerId(req);
 
     // Verify channel exists and is a page channel
     const [ch] = await d
@@ -134,15 +132,14 @@ export async function handlePageBannerUpload(req: IncomingMessage, res: ServerRe
     }
 
     const bannerId = generateUUIDv7();
-    const ext = path.extname(file.filename) || '.png';
+    const ext = file.filename.includes('.') ? file.filename.slice(file.filename.lastIndexOf('.')) : '.png';
     const bannerFilename = `page-banner-${bannerId}${ext}`;
-    const dir = path.join(config.UPLOAD_DIR, serverId, 'page-banners');
-    await fs.promises.mkdir(dir, { recursive: true });
-    await fs.promises.writeFile(path.join(dir, bannerFilename), file.data);
+    const storageKey = `${serverId}/page-banners/${bannerFilename}`;
+    const savedUrl = await fileStorage.save(storageKey, file.data, file.contentType);
 
-    const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-    const baseUrl = `${proto}://${req.headers.host ?? `localhost:${config.PORT}`}`;
-    const bannerUrl = `${baseUrl}/files/${serverId}/page-banners/${bannerFilename}`;
+    const bannerUrl = savedUrl.startsWith('http')
+      ? savedUrl
+      : `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host ?? 'localhost'}${savedUrl}`;
 
     await d.update(pageContents).set({ bannerUrl }).where(eq(pageContents.channelId, channelId));
 
@@ -184,7 +181,7 @@ export async function handleIconUpload(req: IncomingMessage, res: ServerResponse
 
     const user = await verifyToken(authHeader.slice(7));
     const d = db();
-    const serverId = getServerId();
+    const serverId = await resolveServerId(req);
 
     await requirePermission(d, serverId, user.id, Permissions.MANAGE_SERVER);
 
@@ -217,17 +214,16 @@ export async function handleIconUpload(req: IncomingMessage, res: ServerResponse
       return;
     }
 
-    // Save to disk
+    // Save via storage backend
     const iconId = generateUUIDv7();
-    const ext = path.extname(file.filename) || '.png';
+    const ext = file.filename.includes('.') ? file.filename.slice(file.filename.lastIndexOf('.')) : '.png';
     const iconFilename = `icon-${iconId}${ext}`;
-    const dir = path.join(config.UPLOAD_DIR, serverId, 'icons');
-    await fs.promises.mkdir(dir, { recursive: true });
-    await fs.promises.writeFile(path.join(dir, iconFilename), file.data);
+    const storageKey = `${serverId}/icons/${iconFilename}`;
+    const savedUrl = await fileStorage.save(storageKey, file.data, file.contentType);
 
-    const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-    const baseUrl = `${proto}://${req.headers.host ?? `localhost:${config.PORT}`}`;
-    const iconUrl = `${baseUrl}/files/${serverId}/icons/${iconFilename}`;
+    const iconUrl = savedUrl.startsWith('http')
+      ? savedUrl
+      : `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host ?? 'localhost'}${savedUrl}`;
 
     // Update server row
     await d.update(servers).set({ iconUrl, updatedAt: new Date() }).where(eq(servers.id, serverId));

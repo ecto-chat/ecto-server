@@ -17,6 +17,7 @@ import type {
   SharedFile,
   ChannelFile,
 } from 'ecto-shared';
+import { config } from '../config/index.js';
 
 interface ProfileData {
   username: string;
@@ -37,7 +38,7 @@ export function formatServer(
     adminUserId: string | null;
     defaultChannelId: string | null;
   },
-  config?: { setupCompleted: boolean; allowMemberDms?: boolean },
+  srvConfig?: { setupCompleted: boolean; allowMemberDms?: boolean },
 ): Server {
   return {
     id: row.id,
@@ -47,10 +48,11 @@ export function formatServer(
     banner_url: row.bannerUrl,
     address: row.address ?? '',
     central_connected: row.centralConnected,
-    setup_completed: config?.setupCompleted ?? true,
+    setup_completed: srvConfig?.setupCompleted ?? true,
     admin_user_id: row.adminUserId,
     default_channel_id: row.defaultChannelId ?? null,
-    allow_member_dms: config?.allowMemberDms ?? false,
+    allow_member_dms: srvConfig?.allowMemberDms ?? false,
+    hosting_mode: config.HOSTING_MODE,
   };
 }
 

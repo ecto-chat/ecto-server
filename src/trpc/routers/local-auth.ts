@@ -2,13 +2,18 @@ import argon2 from 'argon2';
 import type { Db } from '../../db/index.js';
 import { localUsers } from '../../db/schema/index.js';
 import { eq } from 'drizzle-orm';
-import { generateUUIDv7 } from 'ecto-shared';
+import { generateUUIDv7, validateUsername } from 'ecto-shared';
 import { ectoError } from '../../utils/errors.js';
 
 export async function registerLocal(
   d: Db,
   input: { username: string; password: string },
 ): Promise<{ id: string; username: string }> {
+  const usernameError = validateUsername(input.username);
+  if (usernameError) {
+    throw ectoError('BAD_REQUEST', 1001, usernameError);
+  }
+
   const hash = await argon2.hash(input.password);
   const id = generateUUIDv7();
 

@@ -1,6 +1,15 @@
 import type { PresenceStatus } from 'ecto-shared';
 
-export class PresenceManager {
+export interface IPresenceManager {
+  update(userId: string, status: PresenceStatus, customText: string | null): void;
+  get(userId: string): { status: PresenceStatus; customText: string | null; lastActiveAt: Date } | null;
+  remove(userId: string): void;
+  getOnlineCount(): number;
+  getOnlineUserIds(): string[];
+  getAllForMembers(userIds: string[]): Map<string, { status: PresenceStatus; customText: string | null }>;
+}
+
+export class MemoryPresenceManager implements IPresenceManager {
   private presences = new Map<string, { status: PresenceStatus; customText: string | null; lastActiveAt: Date }>();
 
   update(userId: string, status: PresenceStatus, customText: string | null) {
@@ -43,4 +52,14 @@ export class PresenceManager {
   }
 }
 
-export const presenceManager = new PresenceManager();
+let _presenceManager: IPresenceManager = new MemoryPresenceManager();
+
+export function setPresenceManager(impl: IPresenceManager) {
+  _presenceManager = impl;
+}
+
+export const presenceManager: IPresenceManager = new Proxy({} as IPresenceManager, {
+  get(_target, prop) {
+    return (_presenceManager as any)[prop];
+  },
+});

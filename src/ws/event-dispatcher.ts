@@ -10,13 +10,30 @@ export interface WsSession {
   eventBuffer: { seq: number; event: string; data: unknown; timestamp: number }[];
   authenticated: boolean;
   lastHeartbeat: number;
+  serverId?: string;
+}
+
+export interface IEventDispatcher {
+  addSession(sessionId: string, userId: string, ws: WebSocket): WsSession;
+  removeSession(sessionId: string): void;
+  subscribe(sessionId: string, channelId: string): void;
+  unsubscribe(sessionId: string, channelId: string): void;
+  dispatchToChannel(channelId: string, event: string, data: unknown): void;
+  dispatchToAll(event: string, data: unknown): void;
+  dispatchToUser(userId: string, event: string, data: unknown): void;
+  getEventBuffer(sessionId: string, afterSeq: number): { seq: number; event: string; data: unknown }[];
+  disconnectUser(userId: string, closeCode: number, reason: string): void;
+  disconnectAll(closeCode: number, reason: string): void;
+  getSession(sessionId: string): WsSession | undefined;
+  hasSession(sessionId: string): boolean;
+  getSessionsByUser(userId: string): WsSession[];
 }
 
 const BUFFER_TTL = 5 * 60 * 1000; // 5 minutes
 
-class EventDispatcher {
-  sessions = new Map<string, WsSession>();
-  userSessions = new Map<string, Set<string>>();
+export class MemoryEventDispatcher implements IEventDispatcher {
+  private sessions = new Map<string, WsSession>();
+  private userSessions = new Map<string, Set<string>>();
   private channelSessions = new Map<string, Set<string>>();
 
   addSession(sessionId: string, userId: string, ws: WebSocket): WsSession {
@@ -149,8 +166,18 @@ class EventDispatcher {
     }
   }
 
+  disconnectAll(closeCode: number, reason: string) {
+    for (const session of this.sessions.values()) {
+      session.ws.close(closeCode, reason);
+    }
+  }
+
   getSession(sessionId: string): WsSession | undefined {
     return this.sessions.get(sessionId);
+  }
+
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
   }
 
   getSessionsByUser(userId: string): WsSession[] {
@@ -165,4 +192,14 @@ class EventDispatcher {
   }
 }
 
-export const eventDispatcher = new EventDispatcher();
+let _eventDispatcher: IEventDispatcher = new MemoryEventDispatcher();
+
+export function setEventDispatcher(impl: IEventDispatcher) {
+  _eventDispatcher = impl;
+}
+
+export const eventDispatcher: IEventDispatcher = new Proxy({} as IEventDispatcher, {
+  get(_target, prop) {
+    return (_eventDispatcher as any)[prop];
+  },
+});

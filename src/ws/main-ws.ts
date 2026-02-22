@@ -1,8 +1,10 @@
+import type http from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { generateUUIDv7, HEARTBEAT_INTERVAL, PROTOCOL_VERSION, WsCloseCode } from 'ecto-shared';
 import type { WsMessage } from 'ecto-shared';
 import { eventDispatcher } from './event-dispatcher.js';
 import { verifyToken } from '../middleware/auth.js';
+import { resolveServerId } from '../trpc/context.js';
 import { db } from '../db/index.js';
 import {
   servers,
@@ -42,7 +44,7 @@ interface PendingSession {
 export function setupMainWebSocket(): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
     const sessionId = generateUUIDv7();
 
     // Send system.hello
@@ -94,8 +96,11 @@ export function setupMainWebSocket(): WebSocketServer {
           const user = await verifyToken(payload.token);
           const d = db();
 
-          // Verify membership
-          const [server] = await d.select().from(servers).limit(1);
+          // Resolve which server this connection is for
+          const serverId = await resolveServerId(req);
+          if (!serverId) { ws.close(WsCloseCode.UNKNOWN_ERROR, 'No server'); return; }
+
+          const [server] = await d.select().from(servers).where(eq(servers.id, serverId)).limit(1);
           if (!server) { ws.close(WsCloseCode.UNKNOWN_ERROR, 'No server'); return; }
 
           const [member] = await d
@@ -113,6 +118,7 @@ export function setupMainWebSocket(): WebSocketServer {
           clearTimeout(identifyTimeout);
 
           const session = eventDispatcher.addSession(sessionId, user.id, ws);
+          session.serverId = serverId;
           userId = user.id;
 
           // Cancel any pending offline timer from a previous session
@@ -215,7 +221,8 @@ export function setupMainWebSocket(): WebSocketServer {
             }
           }, HEARTBEAT_TIMEOUT);
 
-        } catch {
+        } catch (err) {
+          console.error('[ws] Identify failed:', err instanceof Error ? err.message : err);
           ws.close(WsCloseCode.AUTHENTICATION_FAILED, 'Auth failed');
         }
         return;
@@ -254,7 +261,8 @@ export function setupMainWebSocket(): WebSocketServer {
             const subData = subResult.data;
             try {
               const d = db();
-              const permCtx = await buildPermissionContext(d, (await d.select().from(servers).limit(1))[0]!.id, session.userId, subData.channel_id);
+              const sid = await resolveServerId(req);
+              const permCtx = await buildPermissionContext(d, sid, session.userId, subData.channel_id);
               if (hasPermission(computePermissions(permCtx), Permissions.READ_MESSAGES)) {
                 eventDispatcher.subscribe(sessionId, subData.channel_id);
                 ws.send(JSON.stringify({ event: 'subscribed', data: { channel_id: subData.channel_id } }));
@@ -326,15 +334,15 @@ export function setupMainWebSocket(): WebSocketServer {
             const { conversation_id } = dmTypingResult.data;
             if (rateLimiter.check(`dm_typing:${session.userId}:${conversation_id}`, 1, 3000)) {
               const d = db();
-              const [server] = await d.select().from(servers).limit(1);
-              if (server) {
+              const dmServerId = await resolveServerId(req);
+              if (dmServerId) {
                 const [convo] = await d
                   .select()
                   .from(dmConversations)
                   .where(
                     and(
                       eq(dmConversations.id, conversation_id),
-                      eq(dmConversations.serverId, server.id),
+                      eq(dmConversations.serverId, dmServerId),
                       or(
                         eq(dmConversations.userA, session.userId),
                         eq(dmConversations.userB, session.userId),
