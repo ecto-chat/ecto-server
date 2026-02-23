@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { roles, memberRoles } from '../../db/schema/index.js';
 import { eq, and, desc, max } from 'drizzle-orm';
-import { generateUUIDv7, Permissions } from 'ecto-shared';
+import { generateUUIDv7, Permissions, permissionBitfieldSchema } from 'ecto-shared';
 import { formatRole } from '../../utils/format.js';
 import { requirePermission, requireMember } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -25,7 +25,7 @@ export const rolesRouter = router({
       z.object({
         name: z.string().min(1).max(100),
         color: z.string().max(7).optional(),
-        permissions: z.number().int().optional(),
+        permissions: permissionBitfieldSchema.optional(),
         position: z.number().int().optional(),
       }),
     )
@@ -73,7 +73,7 @@ export const rolesRouter = router({
         role_id: z.string().uuid(),
         name: z.string().min(1).max(100).optional(),
         color: z.string().max(7).optional(),
-        permissions: z.number().int().optional(),
+        permissions: permissionBitfieldSchema.optional(),
         position: z.number().int().optional(),
       }),
     )

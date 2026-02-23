@@ -286,6 +286,7 @@ export async function requireMember(
   d: Db,
   serverId: string,
   userId: string,
+  tokenVersion?: number,
 ) {
   const [member] = await d
     .select()
@@ -295,6 +296,11 @@ export async function requireMember(
 
   if (!member) {
     throw ectoError('FORBIDDEN', 2002, 'Not a member of this server');
+  }
+
+  // Check token version if provided (lenient for old tokens without tv)
+  if (tokenVersion !== undefined && member.tokenVersion !== tokenVersion) {
+    throw ectoError('UNAUTHORIZED', 1008, 'Token has been revoked');
   }
 
   return member;

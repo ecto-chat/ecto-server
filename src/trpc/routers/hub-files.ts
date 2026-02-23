@@ -16,7 +16,7 @@ import {
   categoryPermissionOverrides,
 } from '../../db/schema/index.js';
 import { eq, and, desc, lt, sql, inArray, isNull } from 'drizzle-orm';
-import { Permissions, generateUUIDv7, computePermissions, hasPermission } from 'ecto-shared';
+import { Permissions, generateUUIDv7, computePermissions, hasPermission, permissionBitfieldSchema } from 'ecto-shared';
 import {
   formatSharedFolder,
   formatSharedFile,
@@ -710,8 +710,8 @@ export const hubFilesRouter = router({
       permission_overrides: z.array(z.object({
         target_type: z.literal('role'),
         target_id: z.string().uuid(),
-        allow: z.number().int(),
-        deny: z.number().int(),
+        allow: permissionBitfieldSchema,
+        deny: permissionBitfieldSchema,
       })),
     }))
     .mutation(async ({ ctx, input }) => {

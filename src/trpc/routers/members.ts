@@ -500,10 +500,19 @@ export const membersRouter = router({
         .set({ passwordHash: newHash })
         .where(eq(localUsers.id, ctx.user.id));
 
+      // Get member's tokenVersion for the fresh token
+      const [member] = await ctx.db
+        .select({ tokenVersion: members.tokenVersion })
+        .from(members)
+        .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, ctx.user.id)))
+        .limit(1);
+
       // Return a fresh token so the client can update stored credentials
       const newToken = await signServerToken({
         sub: ctx.user.id,
         identity_type: 'local',
+        tv: member?.tokenVersion ?? 0,
+        serverId: ctx.serverId,
       });
 
       return { success: true, new_token: newToken };

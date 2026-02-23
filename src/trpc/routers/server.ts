@@ -166,13 +166,13 @@ export const serverRouter = router({
       const result = await d.transaction(async (tx) => {
         // Check not already a member
         const [existingMember] = await tx
-          .select({ id: members.id })
+          .select({ id: members.id, tokenVersion: members.tokenVersion })
           .from(members)
           .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, userId)))
           .limit(1);
 
         if (existingMember) {
-          const serverToken = await signServerToken({ sub: userId, identity_type: identityType });
+          const serverToken = await signServerToken({ sub: userId, identity_type: identityType, tv: existingMember.tokenVersion, serverId: ctx.serverId });
           const profile = await resolveUserProfile(tx, userId, identityType);
           const memberRoleRows = await tx
             .select({ roleId: memberRoles.roleId })
@@ -252,7 +252,7 @@ export const serverRouter = router({
         }
 
         // Sign server token
-        const serverToken = await signServerToken({ sub: userId, identity_type: identityType });
+        const serverToken = await signServerToken({ sub: userId, identity_type: identityType, tv: 0, serverId: ctx.serverId });
 
         // Get member data
         const [memberRow] = await tx.select().from(members).where(eq(members.id, memberId)).limit(1);
@@ -417,6 +417,26 @@ export const serverRouter = router({
       eventDispatcher.dispatchToAll('server.update', formatted);
       return { success: true };
     }),
+
+  refreshToken: protectedProcedure.mutation(async ({ ctx }) => {
+    const d = ctx.db;
+    const member = await requireMember(d, ctx.serverId, ctx.user.id);
+
+    const [server] = await d
+      .select({ id: servers.id })
+      .from(servers)
+      .where(eq(servers.id, ctx.serverId))
+      .limit(1);
+
+    const serverToken = await signServerToken({
+      sub: ctx.user.id,
+      identity_type: ctx.user.identity_type,
+      tv: member.tokenVersion,
+      serverId: server?.id,
+    });
+
+    return { server_token: serverToken };
+  }),
 
   uploadIcon: protectedProcedure
     .input(z.object({ icon_url: z.string() }))

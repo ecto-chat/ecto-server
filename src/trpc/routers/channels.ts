@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { channels, categories, channelPermissionOverrides, pageContents } from '../../db/schema/index.js';
 import { eq, and, max } from 'drizzle-orm';
-import { generateUUIDv7, Permissions, computePermissions, hasPermission } from 'ecto-shared';
+import { generateUUIDv7, Permissions, computePermissions, hasPermission, permissionBitfieldSchema } from 'ecto-shared';
 import { formatChannel, formatCategory } from '../../utils/format.js';
 import { requirePermission, requireMember, buildBatchPermissionContext } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -72,8 +72,8 @@ export const channelsRouter = router({
             z.object({
               target_type: z.enum(['role', 'member']),
               target_id: z.string().uuid(),
-              allow: z.number().int(),
-              deny: z.number().int(),
+              allow: permissionBitfieldSchema,
+              deny: permissionBitfieldSchema,
             }),
           )
           .optional(),
@@ -160,8 +160,8 @@ export const channelsRouter = router({
             z.object({
               target_type: z.enum(['role', 'member']),
               target_id: z.string().uuid(),
-              allow: z.number().int(),
-              deny: z.number().int(),
+              allow: permissionBitfieldSchema,
+              deny: permissionBitfieldSchema,
             }),
           )
           .optional(),

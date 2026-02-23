@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, boolean, timestamp, index, unique } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, boolean, timestamp, index, unique, integer } from 'drizzle-orm/pg-core';
 import { servers } from './servers.js';
 
 export const members = pgTable(
@@ -12,6 +12,7 @@ export const members = pgTable(
     identityType: varchar('identity_type', { length: 10 }).notNull(),
     nickname: varchar('nickname', { length: 64 }),
     allowDms: boolean('allow_dms').notNull().default(true),
+    tokenVersion: integer('token_version').notNull().default(0),
     joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

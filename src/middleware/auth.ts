@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 export interface AuthUser {
   id: string;
   identity_type: 'global' | 'local';
+  tv?: number;
 }
 
 /** Cache profile from central verification result */
@@ -47,7 +48,7 @@ export async function verifyToken(token: string): Promise<AuthUser> {
         centralVerifyToken(token).then(cacheProfile).catch(() => {});
       }
 
-      return { id: payload.sub, identity_type: payload.identity_type };
+      return { id: payload.sub, identity_type: payload.identity_type, tv: payload.tv };
     }
   } catch {
     // Not a server token — try central

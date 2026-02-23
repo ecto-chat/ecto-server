@@ -16,6 +16,9 @@ export async function createServer(_config: Config) {
     router: appRouter,
     createContext,
     basePath: '/trpc/',
+    onError({ error, path }) {
+      console.error(`[trpc] ${path}:`, error.message, error.cause ?? '');
+    },
   });
 
   const server = http.createServer(async (req, res) => {
