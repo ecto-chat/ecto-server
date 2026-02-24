@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
-import { messages, attachments, reactions, channels, members, roles, memberRoles, readStates, serverConfig } from '../../db/schema/index.js';
+import { messages, attachments, reactions, channels, members, roles, memberRoles, readStates, serverConfig, activityItems } from '../../db/schema/index.js';
 import { eq, and, lt, gt, desc, asc, inArray, sql } from 'drizzle-orm';
 import { generateUUIDv7, Permissions, parseMentions, MessageType, computePermissions, hasPermission } from 'ecto-shared';
 import { formatMessage, formatAttachment, formatMessageAuthor } from '../../utils/format.js';
@@ -135,6 +135,7 @@ export const messagesRouter = router({
 
       // Collect user IDs that have already been notified (to avoid duplicates)
       const notifiedUsers = new Set<string>();
+      const pendingActivities: Array<{ id: string; recipientId: string }> = [];
 
       // Update mention counts for mentioned users
       if (parsed.users.length > 0) {
@@ -160,6 +161,17 @@ export const messagesRouter = router({
               content: input.content ?? '',
             });
             sendNotification(mentionedUserId, input.channel_id, 'mention');
+            const mentActId = generateUUIDv7();
+            await d.insert(activityItems).values({
+              id: mentActId,
+              userId: mentionedUserId,
+              type: 'mention',
+              actorId: ctx.user.id,
+              messageId: id,
+              channelId: input.channel_id,
+              contentPreview: (input.content ?? '').slice(0, 100),
+            });
+            pendingActivities.push({ id: mentActId, recipientId: mentionedUserId });
           }
         }
       }
@@ -188,6 +200,17 @@ export const messagesRouter = router({
             content: input.content ?? '',
           });
           sendNotification(m.userId, input.channel_id, 'mention');
+          const evActId = generateUUIDv7();
+          await d.insert(activityItems).values({
+            id: evActId,
+            userId: m.userId,
+            type: 'mention',
+            actorId: ctx.user.id,
+            messageId: id,
+            channelId: input.channel_id,
+            contentPreview: (input.content ?? '').slice(0, 100),
+          });
+          pendingActivities.push({ id: evActId, recipientId: m.userId });
         }
       }
 
@@ -223,6 +246,17 @@ export const messagesRouter = router({
               content: input.content ?? '',
             });
             sendNotification(m.userId, input.channel_id, 'mention');
+            const roleActId = generateUUIDv7();
+            await d.insert(activityItems).values({
+              id: roleActId,
+              userId: m.userId,
+              type: 'mention',
+              actorId: ctx.user.id,
+              messageId: id,
+              channelId: input.channel_id,
+              contentPreview: (input.content ?? '').slice(0, 100),
+            });
+            pendingActivities.push({ id: roleActId, recipientId: m.userId });
           }
         }
       }
@@ -236,6 +270,23 @@ export const messagesRouter = router({
         .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, ctx.user.id)))
         .limit(1);
       const author = formatMessageAuthor(profile, ctx.user.id, member?.nickname ?? null);
+
+      // Dispatch pending activity items
+      if (pendingActivities.length > 0) {
+        for (const pa of pendingActivities) {
+          eventDispatcher.dispatchToUser(pa.recipientId, 'activity.create', {
+            id: pa.id,
+            type: 'mention',
+            actor: author,
+            content_preview: (input.content ?? '').slice(0, 100),
+            message_id: id,
+            source: { server_id: ctx.serverId, channel_id: input.channel_id },
+            read: false,
+            created_at: new Date().toISOString(),
+          });
+        }
+      }
+
       const msgAttachments = input.attachment_ids?.length
         ? (await d.select().from(attachments).where(inArray(attachments.id, input.attachment_ids))).map(formatAttachment)
         : [];
@@ -414,6 +465,42 @@ export const messagesRouter = router({
         action: input.action,
         count: reactionCount,
       });
+
+      // Activity: reaction notification
+      if (input.action === 'add' && msg.authorId !== ctx.user.id) {
+        const activityId = generateUUIDv7();
+        const actorProfile = (await resolveUserProfiles(d, [ctx.user.id])).get(ctx.user.id) ?? { username: 'Unknown', display_name: null, avatar_url: null };
+        const [actorMember] = await d
+          .select({ nickname: members.nickname })
+          .from(members)
+          .where(and(eq(members.serverId, ctx.serverId), eq(members.userId, ctx.user.id)))
+          .limit(1);
+        const actor = formatMessageAuthor(actorProfile, ctx.user.id, actorMember?.nickname ?? null);
+
+        await d.insert(activityItems).values({
+          id: activityId,
+          userId: msg.authorId,
+          type: 'reaction',
+          actorId: ctx.user.id,
+          messageId: input.message_id,
+          channelId: msg.channelId,
+          contentPreview: (msg.content ?? '').slice(0, 100),
+          emoji: input.emoji,
+        });
+
+        eventDispatcher.dispatchToUser(msg.authorId, 'activity.create', {
+          id: activityId,
+          type: 'reaction',
+          actor,
+          content_preview: (msg.content ?? '').slice(0, 100),
+          emoji: input.emoji,
+          message_id: input.message_id,
+          source: { server_id: ctx.serverId, channel_id: msg.channelId },
+          read: false,
+          created_at: new Date().toISOString(),
+        });
+      }
+
       return groups;
     }),
 });

@@ -8,6 +8,7 @@ import {
   reactions,
   members,
   serverConfig,
+  activityItems,
 } from '../../db/schema/index.js';
 import { eq, and, or, ne, lt, gt, desc, inArray, sql, count as countFn } from 'drizzle-orm';
 import { generateUUIDv7, MessageType } from 'ecto-shared';
@@ -364,6 +365,27 @@ export const serverDmsRouter = router({
       eventDispatcher.dispatchToUser(input.recipient_id, 'server_dm.message', {
         ...formatted,
         _conversation_peer_id: ctx.user.id,
+      });
+
+      // Activity item for server DM
+      const activityId = generateUUIDv7();
+      await d.insert(activityItems).values({
+        id: activityId,
+        userId: input.recipient_id,
+        type: 'server_dm',
+        actorId: ctx.user.id,
+        conversationId: convo!.id,
+        contentPreview: input.content.slice(0, 100),
+      });
+
+      eventDispatcher.dispatchToUser(input.recipient_id, 'activity.create', {
+        id: activityId,
+        type: 'server_dm',
+        actor: author,
+        content_preview: input.content.slice(0, 100),
+        source: { server_id: ctx.serverId, conversation_id: convo!.id },
+        read: false,
+        created_at: new Date().toISOString(),
       });
 
       return formatted;

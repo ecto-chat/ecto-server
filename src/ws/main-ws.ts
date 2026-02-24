@@ -16,8 +16,9 @@ import {
   memberRoles,
   serverConfig,
   dmConversations,
+  activityItems,
 } from '../db/schema/index.js';
-import { eq, and, or, inArray } from 'drizzle-orm';
+import { eq, and, or, inArray, count as countFn, sql } from 'drizzle-orm';
 import { formatServer, formatChannel, formatCategory, formatRole, formatMember, formatReadState, formatVoiceState } from '../utils/format.js';
 import { resolveUserProfiles } from '../utils/resolve-profile.js';
 import { presenceManager } from '../services/presence.js';
@@ -177,6 +178,17 @@ export function setupMainWebSocket(): WebSocketServer {
             visibleCategoryIds.has(cat.id) || userHasManageChannels,
           );
 
+          // Activity unread counts (split by type)
+          const [activityCounts] = await d
+            .select({
+              notifications: sql<number>`count(*) filter (where ${activityItems.type} != 'server_dm')`,
+              server_dms: sql<number>`count(*) filter (where ${activityItems.type} = 'server_dm')`,
+            })
+            .from(activityItems)
+            .where(and(eq(activityItems.userId, user.id), eq(activityItems.read, false)));
+          const activityUnreadNotifications = Number(activityCounts?.notifications ?? 0);
+          const activityUnreadServerDms = Number(activityCounts?.server_dms ?? 0);
+
           const ready: WsMessage = {
             event: 'system.ready',
             data: {
@@ -202,6 +214,8 @@ export function setupMainWebSocket(): WebSocketServer {
                 last_active_at: new Date().toISOString(),
               })),
               voice_states: voiceStates.map(formatVoiceState),
+              activity_unread_notifications: activityUnreadNotifications,
+              activity_unread_server_dms: activityUnreadServerDms,
             },
           };
           ws.send(JSON.stringify(ready));
