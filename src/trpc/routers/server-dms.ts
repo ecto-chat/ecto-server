@@ -45,6 +45,7 @@ function formatServerDmMessage(
     channelId: string;
     authorId: string;
     content: string | null;
+    replyTo: string | null;
     editedAt: Date | null;
     createdAt: Date;
   },
@@ -57,6 +58,7 @@ function formatServerDmMessage(
     conversation_id: row.channelId,
     author,
     content: row.content,
+    reply_to: row.replyTo ?? null,
     attachments: msgAttachments,
     reactions: reactionGroups,
     edited_at: row.editedAt?.toISOString() ?? null,
@@ -247,6 +249,7 @@ export const serverDmsRouter = router({
         conversation_id: m.channel_id,
         author: m.author,
         content: m.content,
+        reply_to: m.reply_to ?? null,
         attachments: m.attachments,
         reactions: m.reactions,
         edited_at: m.edited_at,
@@ -262,6 +265,7 @@ export const serverDmsRouter = router({
         recipient_id: z.string().uuid(),
         content: z.string().min(1).max(4000),
         attachment_ids: z.array(z.string().uuid()).optional(),
+        reply_to: z.string().uuid().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -323,6 +327,7 @@ export const serverDmsRouter = router({
         authorId: ctx.user.id,
         content: input.content,
         type: MessageType.DEFAULT,
+        replyTo: input.reply_to ?? null,
       });
 
       // Link attachments
@@ -387,6 +392,35 @@ export const serverDmsRouter = router({
         read: false,
         created_at: new Date().toISOString(),
       });
+
+      // Reply notification
+      if (input.reply_to) {
+        const [replyTarget] = await d
+          .select({ authorId: messages.authorId })
+          .from(messages)
+          .where(and(eq(messages.id, input.reply_to), eq(messages.deleted, false)))
+          .limit(1);
+        if (replyTarget && replyTarget.authorId !== ctx.user.id) {
+          const replyActId = generateUUIDv7();
+          await d.insert(activityItems).values({
+            id: replyActId,
+            userId: replyTarget.authorId,
+            type: 'reply',
+            actorId: ctx.user.id,
+            conversationId: convo!.id,
+            contentPreview: input.content.slice(0, 100),
+          });
+          eventDispatcher.dispatchToUser(replyTarget.authorId, 'activity.create', {
+            id: replyActId,
+            type: 'reply',
+            actor: author,
+            content_preview: input.content.slice(0, 100),
+            source: { server_id: ctx.serverId, conversation_id: convo!.id },
+            read: false,
+            created_at: new Date().toISOString(),
+          });
+        }
+      }
 
       return formatted;
     }),

@@ -91,10 +91,12 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
 
       // Join
       const state = voiceStateManager.join(session.userId, session.sessionId, channelId);
+      console.log(`[voice:debug] user ${session.userId} joining channel ${channelId}`);
       // Get/create mediasoup router + transports
       try {
         const router = await voiceManager.getOrCreateRouter(channelId);
         const transports = await voiceManager.createTransports(channelId, session.userId);
+        console.log(`[voice:debug] transports created for ${session.userId}, send ICE candidates:`, JSON.stringify(transports.send.iceCandidates));
 
         session.ws.send(JSON.stringify({
           event: 'voice.router_capabilities',
@@ -157,7 +159,9 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
     case 'voice.connect_transport': {
       const connectResult = voiceConnectSchema.safeParse(msg.data);
       if (connectResult.success) {
+        console.log(`[voice:debug] connect_transport: ${connectResult.data.transport_id} for user ${session.userId}`);
         await voiceManager.connectTransport(connectResult.data.transport_id, connectResult.data.dtls_parameters);
+        console.log(`[voice:debug] transport connected: ${connectResult.data.transport_id}`);
       }
       break;
     }
@@ -166,6 +170,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       const capsResult = voiceCapabilitiesSchema.safeParse(msg.data);
       if (!capsResult.success) break;
       const rtpCapabilities = capsResult.data.rtp_capabilities as object;
+      console.log(`[voice:debug] capabilities received from user ${session.userId}`);
 
       // Now create consumers for existing producers using the client's real capabilities
       const voiceState = voiceStateManager.getByUser(session.userId);
@@ -174,6 +179,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
 
       if (voiceState) {
         const existingProducers = await voiceManager.getProducersInChannel(voiceState.channelId, session.userId);
+        console.log(`[voice:debug] existing producers in channel for ${session.userId}:`, existingProducers.length, existingProducers.map(p => ({ id: p.producerId, kind: p.kind, source: p.source, userId: p.userId })));
         for (const prod of existingProducers) {
           try {
             const consumer = await voiceManager.createConsumer(
@@ -183,6 +189,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
               rtpCapabilities,
             );
             if (consumer) {
+              console.log(`[voice:debug] consumer created for ${session.userId}: kind=${consumer.kind}, producerId=${prod.producerId}, consumerId=${consumer.consumerId}`);
               eventDispatcher.dispatchToUser(session.userId, 'voice.new_consumer', {
                 consumer_id: consumer.consumerId,
                 producer_id: prod.producerId,
@@ -191,9 +198,11 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
                 rtpParameters: consumer.rtpParameters,
                 source: prod.source,
               });
+            } else {
+              console.log(`[voice:debug] consumer NOT created (canConsume=false) for ${session.userId}, producer ${prod.producerId}`);
             }
-          } catch {
-            // Consumer creation can fail if capabilities don't match
+          } catch (err) {
+            console.warn(`[voice:debug] consumer creation failed for ${session.userId}, producer ${prod.producerId}:`, err);
           }
         }
       }
@@ -231,6 +240,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
 
         try {
           const producer = await voiceManager.createProducer(transportId, kind, rtpParameters as object, source);
+          console.log(`[voice:debug] producer created: user=${session.userId}, kind=${kind}, source=${source ?? (kind === 'audio' ? 'mic' : 'camera')}, id=${producer.id}`);
           session.ws.send(JSON.stringify({
             event: 'voice.produced',
             data: { producer_id: producer.id },
@@ -240,10 +250,11 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
           const state = voiceStateManager.getByUser(session.userId);
           if (state) {
             const channelUsers = voiceStateManager.getByChannel(state.channelId);
+            console.log(`[voice:debug] broadcasting new producer to ${channelUsers.length - 1} other users in channel`);
             for (const other of channelUsers) {
               if (other.userId === session.userId) continue;
               const otherCaps = voiceManager.getDeviceCapabilities(other.userId);
-              if (!otherCaps) continue; // Client hasn't sent capabilities yet
+              if (!otherCaps) { console.log(`[voice:debug] user ${other.userId} has no device capabilities yet, skipping consumer`); continue; }
               try {
                 const consumer = await voiceManager.createConsumer(
                   state.channelId,
@@ -252,6 +263,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
                   otherCaps,
                 );
                 if (consumer) {
+                  console.log(`[voice:debug] consumer created for ${other.userId}: kind=${consumer.kind}, consumerId=${consumer.consumerId}`);
                   eventDispatcher.dispatchToUser(other.userId, 'voice.new_consumer', {
                     consumer_id: consumer.consumerId,
                     producer_id: producer.id,
@@ -260,13 +272,16 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
                     rtpParameters: consumer.rtpParameters,
                     source: source ?? (kind === 'audio' ? 'mic' : 'camera'),
                   });
+                } else {
+                  console.log(`[voice:debug] consumer NOT created for ${other.userId} (canConsume=false)`);
                 }
-              } catch {
-                // Consumer creation failure
+              } catch (err) {
+                console.warn(`[voice:debug] consumer creation failed for ${other.userId}:`, err);
               }
             }
           }
         } catch (err) {
+          console.error(`[voice:debug] produce failed for user ${session.userId}:`, err);
           session.ws.send(JSON.stringify({ event: 'voice.error', data: { code: 8003, message: 'Transport failed' } }));
         }
       }

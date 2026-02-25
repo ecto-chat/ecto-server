@@ -135,7 +135,7 @@ export const messagesRouter = router({
 
       // Collect user IDs that have already been notified (to avoid duplicates)
       const notifiedUsers = new Set<string>();
-      const pendingActivities: Array<{ id: string; recipientId: string }> = [];
+      const pendingActivities: Array<{ id: string; recipientId: string; type: string }> = [];
 
       // Update mention counts for mentioned users
       if (parsed.users.length > 0) {
@@ -171,7 +171,7 @@ export const messagesRouter = router({
               channelId: input.channel_id,
               contentPreview: (input.content ?? '').slice(0, 100),
             });
-            pendingActivities.push({ id: mentActId, recipientId: mentionedUserId });
+            pendingActivities.push({ id: mentActId, recipientId: mentionedUserId, type: 'mention' });
           }
         }
       }
@@ -210,7 +210,7 @@ export const messagesRouter = router({
             channelId: input.channel_id,
             contentPreview: (input.content ?? '').slice(0, 100),
           });
-          pendingActivities.push({ id: evActId, recipientId: m.userId });
+          pendingActivities.push({ id: evActId, recipientId: m.userId, type: 'mention' });
         }
       }
 
@@ -256,8 +256,32 @@ export const messagesRouter = router({
               channelId: input.channel_id,
               contentPreview: (input.content ?? '').slice(0, 100),
             });
-            pendingActivities.push({ id: roleActId, recipientId: m.userId });
+            pendingActivities.push({ id: roleActId, recipientId: m.userId, type: 'mention' });
           }
+        }
+      }
+
+      // Reply notification
+      if (input.reply_to) {
+        const [replyTarget] = await d
+          .select({ authorId: messages.authorId, content: messages.content })
+          .from(messages)
+          .where(and(eq(messages.id, input.reply_to), eq(messages.deleted, false)))
+          .limit(1);
+
+        if (replyTarget && replyTarget.authorId !== ctx.user.id && !notifiedUsers.has(replyTarget.authorId)) {
+          notifiedUsers.add(replyTarget.authorId);
+          const replyActId = generateUUIDv7();
+          await d.insert(activityItems).values({
+            id: replyActId,
+            userId: replyTarget.authorId,
+            type: 'reply',
+            actorId: ctx.user.id,
+            messageId: id,
+            channelId: input.channel_id,
+            contentPreview: (input.content ?? '').slice(0, 100),
+          });
+          pendingActivities.push({ id: replyActId, recipientId: replyTarget.authorId, type: 'reply' });
         }
       }
 
@@ -276,7 +300,7 @@ export const messagesRouter = router({
         for (const pa of pendingActivities) {
           eventDispatcher.dispatchToUser(pa.recipientId, 'activity.create', {
             id: pa.id,
-            type: 'mention',
+            type: pa.type,
             actor: author,
             content_preview: (input.content ?? '').slice(0, 100),
             message_id: id,

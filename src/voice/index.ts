@@ -548,6 +548,9 @@ export function setVoiceManager(impl: IVoiceManager) {
 
 export const voiceManager: IVoiceManager = new Proxy({} as IVoiceManager, {
   get(_target, prop) {
-    return (_voiceManager as any)[prop];
+    const value = (_voiceManager as any)[prop];
+    // Bind methods to the real instance so `this` works correctly
+    if (typeof value === 'function') return value.bind(_voiceManager);
+    return value;
   },
 });
