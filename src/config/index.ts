@@ -11,6 +11,7 @@ const envSchema = z.object({
   MEDIASOUP_MAX_PORT: z.coerce.number().default(40100),
   UPLOAD_DIR: z.string().default('./data/uploads'),
   SERVER_ADDRESS: z.string().optional(),
+  CLIENT_URL: z.string().default('https://app.ecto.chat'),
   HOSTING_MODE: z.enum(['self-hosted', 'managed']).default('self-hosted'),
   ALLOW_LOCAL_ACCOUNTS: z
     .string()

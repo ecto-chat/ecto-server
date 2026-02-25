@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createHTTPHandler } from '@trpc/server/adapters/standalone';
+import { config } from '../config/index.js';
 import type { Config } from '../config/index.js';
 import { appRouter } from '../trpc/router.js';
 import { createContext } from '../trpc/context.js';
@@ -41,6 +42,31 @@ export async function createServer(_config: Config) {
     }
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+    // Browser redirect — send browsers visiting the server URL to the client app
+    if (req.method === 'GET') {
+      const accept = req.headers.accept ?? '';
+      if (accept.includes('text/html')) {
+        const serverAddr = config.SERVER_ADDRESS ?? req.headers.host ?? '';
+        const clientBase = config.CLIENT_URL.replace(/\/+$/, '');
+
+        // GET /invite/:code → redirect with invite param
+        const inviteMatch = url.pathname.match(/^\/invite\/([^/]+)$/);
+        if (inviteMatch) {
+          const code = encodeURIComponent(inviteMatch[1]!);
+          res.writeHead(302, { Location: `${clientBase}?join=${encodeURIComponent(serverAddr)}&invite=${code}` });
+          res.end();
+          return;
+        }
+
+        // GET / → redirect to client with join param
+        if (url.pathname === '/' || url.pathname === '') {
+          res.writeHead(302, { Location: `${clientBase}?join=${encodeURIComponent(serverAddr)}` });
+          res.end();
+          return;
+        }
+      }
+    }
 
     // Health check
     if (url.pathname === '/health') {
