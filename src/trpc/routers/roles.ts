@@ -63,7 +63,7 @@ export const rolesRouter = router({
 
       const [row] = await d.select().from(roles).where(eq(roles.id, id)).limit(1);
       const formatted = formatRole(row!);
-      eventDispatcher.dispatchToAll('role.create', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'role.create', formatted);
       return formatted;
     }),
 
@@ -107,7 +107,7 @@ export const rolesRouter = router({
 
       const [updated] = await ctx.db.select().from(roles).where(eq(roles.id, input.role_id)).limit(1);
       const formatted = formatRole(updated!);
-      eventDispatcher.dispatchToAll('role.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'role.update', formatted);
       return formatted;
     }),
 
@@ -136,7 +136,7 @@ export const rolesRouter = router({
         details: { name: role.name },
       });
 
-      eventDispatcher.dispatchToAll('role.delete', { id: input.role_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, 'role.delete', { id: input.role_id });
       return { success: true };
     }),
 
@@ -170,7 +170,7 @@ export const rolesRouter = router({
         .from(roles)
         .where(eq(roles.serverId, ctx.serverId))
         .orderBy(desc(roles.position));
-      eventDispatcher.dispatchToAll('role.reorder', allRoles.map(formatRole));
+      eventDispatcher.dispatchToServer(ctx.serverId, 'role.reorder', allRoles.map(formatRole));
 
       return { success: true };
     }),

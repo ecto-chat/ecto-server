@@ -41,7 +41,7 @@ export const categoriesRouter = router({
 
       const [row] = await d.select().from(categories).where(eq(categories.id, id)).limit(1);
       const formatted = formatCategory(row!);
-      eventDispatcher.dispatchToAll('category.create', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'category.create', formatted);
       return formatted;
     }),
 
@@ -110,9 +110,9 @@ export const categoriesRouter = router({
         return formatCategory(updated!);
       });
 
-      eventDispatcher.dispatchToAll('category.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'category.update', formatted);
       if (input.permission_overrides) {
-        eventDispatcher.dispatchToAll('permissions.update', { type: 'category', id: input.category_id });
+        eventDispatcher.dispatchToServer(ctx.serverId, 'permissions.update', { type: 'category', id: input.category_id });
       }
       return formatted;
     }),
@@ -160,7 +160,7 @@ export const categoriesRouter = router({
         details: { name: cat.name },
       });
 
-      eventDispatcher.dispatchToAll('category.delete', { id: input.category_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, 'category.delete', { id: input.category_id });
       return { success: true };
     }),
 
@@ -193,7 +193,7 @@ export const categoriesRouter = router({
         .select()
         .from(categories)
         .where(eq(categories.serverId, ctx.serverId));
-      eventDispatcher.dispatchToAll('category.reorder', allCategories.map(formatCategory));
+      eventDispatcher.dispatchToServer(ctx.serverId, 'category.reorder', allCategories.map(formatCategory));
 
       return { success: true };
     }),

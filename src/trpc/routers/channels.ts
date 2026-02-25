@@ -142,7 +142,7 @@ export const channelsRouter = router({
         return formatChannel(row!);
       });
 
-      eventDispatcher.dispatchToAll('channel.create', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'channel.create', formatted);
       return formatted;
     }),
 
@@ -219,9 +219,9 @@ export const channelsRouter = router({
         return formatChannel(updated!);
       });
 
-      eventDispatcher.dispatchToAll('channel.update', updatedFormatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'channel.update', updatedFormatted);
       if (input.permission_overrides) {
-        eventDispatcher.dispatchToAll('permissions.update', { type: 'channel', id: input.channel_id });
+        eventDispatcher.dispatchToServer(ctx.serverId, 'permissions.update', { type: 'channel', id: input.channel_id });
       }
       return updatedFormatted;
     }),
@@ -242,7 +242,7 @@ export const channelsRouter = router({
       // Clean up voice states for users in this channel before deletion
       const voiceUsers = voiceStateManager.getByChannel(input.channel_id);
       for (const state of voiceUsers) {
-        cleanupVoiceState(state.userId);
+        cleanupVoiceState(state.userId, ctx.serverId);
       }
 
       await ctx.db.delete(channels).where(eq(channels.id, input.channel_id));
@@ -256,7 +256,7 @@ export const channelsRouter = router({
         details: { name: ch.name },
       });
 
-      eventDispatcher.dispatchToAll('channel.delete', { id: input.channel_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, 'channel.delete', { id: input.channel_id });
       return { success: true };
     }),
 
@@ -313,7 +313,7 @@ export const channelsRouter = router({
         .select()
         .from(channels)
         .where(eq(channels.serverId, ctx.serverId));
-      eventDispatcher.dispatchToAll('channel.reorder', allChannels.map(formatChannel));
+      eventDispatcher.dispatchToServer(ctx.serverId, 'channel.reorder', allChannels.map(formatChannel));
 
       return { success: true };
     }),

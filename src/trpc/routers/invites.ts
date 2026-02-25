@@ -49,7 +49,7 @@ export const invitesRouter = router({
       const profile = profiles.get(ctx.user.id);
 
       const invite = formatInvite(row!, profile?.username ?? 'Unknown');
-      eventDispatcher.dispatchToAll('invite.create', invite);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'invite.create', invite);
       return {
         invite,
         url: `ecto://${code}`,
@@ -94,7 +94,7 @@ export const invitesRouter = router({
         targetId: input.invite_id,
       });
 
-      eventDispatcher.dispatchToAll('invite.delete', { id: input.invite_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, 'invite.delete', { id: input.invite_id });
       return { success: true };
     }),
 });

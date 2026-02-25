@@ -114,7 +114,7 @@ export const serverRouter = router({
         .where(eq(servers.id, ctx.serverId))
         .limit(1);
       const formatted = formatServer(updated!);
-      eventDispatcher.dispatchToAll('server.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatted);
       return formatted;
     }),
 
@@ -270,7 +270,7 @@ export const serverRouter = router({
 
       // Broadcast after transaction commits
       if (result.isNew) {
-        eventDispatcher.dispatchToAll('member.join', result.member);
+        eventDispatcher.dispatchToServer(ctx.serverId, 'member.join', result.member);
 
         // Insert MEMBER_JOIN system message in the default channel
         const [[srvCfg], [srv]] = await Promise.all([
@@ -325,7 +325,7 @@ export const serverRouter = router({
     const member = await requireMember(d, ctx.serverId, ctx.user.id);
 
     // Clean up voice state before removing member
-    cleanupVoiceState(ctx.user.id);
+    cleanupVoiceState(ctx.user.id, ctx.serverId);
 
     // Clean up read states and DM data
     await cleanupMemberData(d, ctx.serverId, ctx.user.id);
@@ -340,7 +340,7 @@ export const serverRouter = router({
       targetId: ctx.user.id,
     });
 
-    eventDispatcher.dispatchToAll('member.leave', { user_id: ctx.user.id });
+    eventDispatcher.dispatchToServer(ctx.serverId, 'member.leave', { user_id: ctx.user.id });
     return { success: true };
   }),
 
@@ -356,11 +356,11 @@ export const serverRouter = router({
 
       // Clean up all voice states before deleting
       for (const state of voiceStateManager.getAllStates()) {
-        cleanupVoiceState(state.userId);
+        cleanupVoiceState(state.userId, ctx.serverId);
       }
 
       // Broadcast server deletion so clients disconnect
-      eventDispatcher.dispatchToAll('server.delete', { id: ctx.serverId });
+      eventDispatcher.dispatchToServer(ctx.serverId, 'server.delete', { id: ctx.serverId });
 
       await insertAuditLog(d, {
         serverId: ctx.serverId,
@@ -414,7 +414,7 @@ export const serverRouter = router({
 
       const [updated] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
       const formatted = formatServer(updated!);
-      eventDispatcher.dispatchToAll('server.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatted);
       return { success: true };
     }),
 
@@ -447,7 +447,7 @@ export const serverRouter = router({
       // Broadcast full server object so clients get consistent payloads
       const [updated] = await ctx.db.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
       const formatted = formatServer(updated!);
-      eventDispatcher.dispatchToAll('server.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatted);
       return { icon_url: input.icon_url };
     }),
 });

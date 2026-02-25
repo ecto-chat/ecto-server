@@ -69,7 +69,7 @@ export const serverConfigRouter = router({
       const [serverRow] = await ctx.db.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
       const [updatedCfg] = await ctx.db.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
       if (serverRow) {
-        eventDispatcher.dispatchToAll('server.update', formatServer(serverRow, updatedCfg));
+        eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatServer(serverRow, updatedCfg));
       }
 
       return { success: true };
@@ -105,7 +105,7 @@ export const serverConfigRouter = router({
     const [serverRow] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
     const [updatedCfg] = await d.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
     if (serverRow) {
-      eventDispatcher.dispatchToAll('server.update', formatServer(serverRow, updatedCfg));
+      eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatServer(serverRow, updatedCfg));
     }
 
     return { success: true };

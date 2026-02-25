@@ -220,8 +220,8 @@ export function setupMainWebSocket(): WebSocketServer {
           };
           ws.send(JSON.stringify(ready));
 
-          // Broadcast online status to all other users
-          eventDispatcher.dispatchToAll('presence.update', {
+          // Broadcast online status to all other users on this server
+          eventDispatcher.dispatchToServer(serverId, 'presence.update', {
             user_id: user.id,
             status: 'online',
             custom_text: null,
@@ -332,12 +332,14 @@ export function setupMainWebSocket(): WebSocketServer {
               presData.status,
               presData.custom_text ?? null,
             );
-            eventDispatcher.dispatchToAll('presence.update', {
-              user_id: session.userId,
-              status: presData.status,
-              custom_text: presData.custom_text ?? null,
-              last_active_at: new Date().toISOString(),
-            });
+            if (session.serverId) {
+              eventDispatcher.dispatchToServer(session.serverId, 'presence.update', {
+                user_id: session.userId,
+                status: presData.status,
+                custom_text: presData.custom_text ?? null,
+                last_active_at: new Date().toISOString(),
+              });
+            }
           }
           break;
         }
@@ -397,9 +399,12 @@ export function setupMainWebSocket(): WebSocketServer {
       const session = eventDispatcher.getSession(sessionId);
       if (session) {
         const closingUserId = session.userId;
+        const closingServerId = session.serverId;
 
         // Clean up voice state only if THIS session owns it
-        cleanupVoiceState(closingUserId, sessionId);
+        if (closingServerId) {
+          cleanupVoiceState(closingUserId, closingServerId, sessionId);
+        }
 
         // Remove session immediately so the new connection can take over
         eventDispatcher.removeSession(sessionId);
@@ -412,12 +417,14 @@ export function setupMainWebSocket(): WebSocketServer {
             // Re-check after grace period — user may have reconnected
             if (eventDispatcher.getSessionsByUser(closingUserId).length === 0) {
               presenceManager.remove(closingUserId);
-              eventDispatcher.dispatchToAll('presence.update', {
-                user_id: closingUserId,
-                status: 'offline',
-                custom_text: null,
-                last_active_at: new Date().toISOString(),
-              });
+              if (closingServerId) {
+                eventDispatcher.dispatchToServer(closingServerId, 'presence.update', {
+                  user_id: closingUserId,
+                  status: 'offline',
+                  custom_text: null,
+                  last_active_at: new Date().toISOString(),
+                });
+              }
             }
           }, OFFLINE_GRACE_PERIOD));
         }

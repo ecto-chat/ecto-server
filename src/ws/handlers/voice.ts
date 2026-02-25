@@ -72,7 +72,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
         // Force: leave current channel
         voiceStateManager.leave(session.userId);
         await voiceManager.leaveChannel(session.userId, existing.channelId);
-        eventDispatcher.dispatchToAll('voice.state_update', {
+        eventDispatcher.dispatchToServer(sid, 'voice.state_update', {
           ...formatVoiceState(existing),
           _removed: true,
         });
@@ -130,7 +130,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       }
 
       // Broadcast state update
-      eventDispatcher.dispatchToAll('voice.state_update', formatVoiceState(state));
+      eventDispatcher.dispatchToServer(sid, 'voice.state_update', formatVoiceState(state));
 
       // Send existing channel participants to the joining user so they know who's already here
       const channelStates = voiceStateManager.getByChannel(channelId);
@@ -146,9 +146,9 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
 
     case 'voice.leave': {
       const state = voiceStateManager.leave(session.userId);
-      if (state) {
+      if (state && session.serverId) {
         await voiceManager.leaveChannel(session.userId, state.channelId);
-        eventDispatcher.dispatchToAll('voice.state_update', {
+        eventDispatcher.dispatchToServer(session.serverId, 'voice.state_update', {
           ...formatVoiceState(state),
           _removed: true,
         });
@@ -293,8 +293,8 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       if (stopResult.success) {
         voiceManager.closeProducer(stopResult.data.producer_id);
         const state = voiceStateManager.getByUser(session.userId);
-        if (state) {
-          eventDispatcher.dispatchToAll('voice.producer_closed', {
+        if (state && session.serverId) {
+          eventDispatcher.dispatchToServer(session.serverId, 'voice.producer_closed', {
             producer_id: stopResult.data.producer_id,
             user_id: session.userId,
             channel_id: state.channelId,
@@ -344,8 +344,8 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       }
 
       const state = voiceStateManager.getByUser(session.userId);
-      if (state) {
-        eventDispatcher.dispatchToAll('voice.state_update', formatVoiceState(state));
+      if (state && session.serverId) {
+        eventDispatcher.dispatchToServer(session.serverId, 'voice.state_update', formatVoiceState(state));
       }
       break;
     }

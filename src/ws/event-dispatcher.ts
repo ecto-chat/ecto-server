@@ -20,6 +20,7 @@ export interface IEventDispatcher {
   unsubscribe(sessionId: string, channelId: string): void;
   dispatchToChannel(channelId: string, event: string, data: unknown): void;
   dispatchToAll(event: string, data: unknown): void;
+  dispatchToServer(serverId: string, event: string, data: unknown): void;
   dispatchToUser(userId: string, event: string, data: unknown): void;
   getEventBuffer(sessionId: string, afterSeq: number): { seq: number; event: string; data: unknown }[];
   disconnectUser(userId: string, closeCode: number, reason: string): void;
@@ -132,6 +133,14 @@ export class MemoryEventDispatcher implements IEventDispatcher {
   dispatchToAll(event: string, data: unknown) {
     for (const session of this.sessions.values()) {
       if (session.authenticated) {
+        this.send(session, event, data);
+      }
+    }
+  }
+
+  dispatchToServer(serverId: string, event: string, data: unknown) {
+    for (const session of this.sessions.values()) {
+      if (session.authenticated && session.serverId === serverId) {
         this.send(session, event, data);
       }
     }
