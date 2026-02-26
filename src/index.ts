@@ -28,13 +28,8 @@ async function main() {
   console.log('Database connected');
 
   // 2. Run migrations
-  if (config.DATABASE_TYPE === 'sqlite') {
-    const { migrate } = await import('drizzle-orm/better-sqlite3/migrator');
-    migrate(d as any, { migrationsFolder: './drizzle' });
-  } else {
-    const { migrate } = await import('drizzle-orm/node-postgres/migrator');
-    await migrate(d as any, { migrationsFolder: './drizzle' });
-  }
+  const { migrate } = await import('drizzle-orm/node-postgres/migrator');
+  await migrate(d as any, { migrationsFolder: './drizzle' });
   console.log('Migrations applied');
 
   // 3. Ensure server row exists

@@ -4,7 +4,6 @@ import { messages } from '../../db/schema/index.js';
 import { eq, and, lt, gt, desc, sql, like } from 'drizzle-orm';
 import { Permissions } from 'ecto-shared';
 import { requirePermission } from '../../utils/permission-context.js';
-import { config } from '../../config/index.js';
 import { hydrateMessages } from '../../utils/message-helpers.js';
 
 export const searchRouter = router({
@@ -29,8 +28,6 @@ export const searchRouter = router({
         await requirePermission(d, ctx.serverId, ctx.user.id, Permissions.READ_MESSAGES, input.channel_id);
       }
 
-      const isPg = config.DATABASE_TYPE === 'pg';
-
       // Build conditions
       const conditions = [eq(messages.deleted, false)];
       if (input.channel_id) conditions.push(eq(messages.channelId, input.channel_id));
@@ -44,32 +41,18 @@ export const searchRouter = router({
         conditions.push(like(messages.content, '%http%'));
       }
 
-      let rows: (typeof messages.$inferSelect)[];
-
-      if (isPg) {
-        // PostgreSQL: use tsvector full-text search
-        conditions.push(
-          sql`"messages"."search_vector" @@ plainto_tsquery('english', ${input.query})`,
-        );
-        rows = await d
-          .select()
-          .from(messages)
-          .where(and(...conditions))
-          .orderBy(
-            sql`ts_rank("messages"."search_vector", plainto_tsquery('english', ${input.query})) DESC`,
-            desc(messages.id),
-          )
-          .limit(limit + 1);
-      } else {
-        // SQLite: LIKE fallback
-        conditions.push(like(messages.content, `%${input.query}%`));
-        rows = await d
-          .select()
-          .from(messages)
-          .where(and(...conditions))
-          .orderBy(desc(messages.id))
-          .limit(limit + 1);
-      }
+      conditions.push(
+        sql`"messages"."search_vector" @@ plainto_tsquery('english', ${input.query})`,
+      );
+      const rows = await d
+        .select()
+        .from(messages)
+        .where(and(...conditions))
+        .orderBy(
+          sql`ts_rank("messages"."search_vector", plainto_tsquery('english', ${input.query})) DESC`,
+          desc(messages.id),
+        )
+        .limit(limit + 1);
 
       const hasMore = rows.length > limit;
       const resultRows = hasMore ? rows.slice(0, limit) : rows;

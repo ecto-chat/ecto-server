@@ -2,8 +2,6 @@ import { z } from 'zod/v4';
 
 const envSchema = z.object({
   DATABASE_URL: z.string().optional(),
-  DATABASE_TYPE: z.enum(['pg', 'sqlite']).default('pg'),
-  DATABASE_PATH: z.string().default('./data/ecto.db'),
   JWT_SECRET: z.string().min(1),
   CENTRAL_URL: z.string().url().optional(),
   PORT: z.coerce.number().default(3000),
