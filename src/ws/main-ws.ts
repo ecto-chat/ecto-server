@@ -17,8 +17,10 @@ import {
   serverConfig,
   dmConversations,
   activityItems,
+  messages,
 } from '../db/schema/index.js';
-import { eq, and, or, inArray, count as countFn, sql } from 'drizzle-orm';
+import { eq, and, or, inArray, count as countFn, sql, desc } from 'drizzle-orm';
+import { hydrateMessages } from '../utils/message-helpers.js';
 import { formatServer, formatChannel, formatCategory, formatRole, formatMember, formatReadState, formatVoiceState } from '../utils/format.js';
 import { resolveUserProfiles } from '../utils/resolve-profile.js';
 import { presenceManager } from '../services/presence.js';
@@ -189,6 +191,30 @@ export function setupMainWebSocket(): WebSocketServer {
           const activityUnreadNotifications = Number(activityCounts?.notifications ?? 0);
           const activityUnreadServerDms = Number(activityCounts?.server_dms ?? 0);
 
+          // Pre-load initial messages for active channel if provided
+          let initialMessages: unknown[] = [];
+          let initialChannelId: string | undefined;
+          let initialHasMore = false;
+
+          if (payload.active_channel_id) {
+            const chPermCtx = permCtxMap.get(payload.active_channel_id);
+            if (chPermCtx && hasPermission(computePermissions(chPermCtx), Permissions.READ_MESSAGES)) {
+              eventDispatcher.subscribe(sessionId, payload.active_channel_id);
+              initialChannelId = payload.active_channel_id;
+
+              const msgRows = await d.select().from(messages)
+                .where(and(eq(messages.channelId, payload.active_channel_id), eq(messages.deleted, false)))
+                .orderBy(desc(messages.id))
+                .limit(51);
+
+              initialHasMore = msgRows.length > 50;
+              const rows = initialHasMore ? msgRows.slice(0, 50) : msgRows;
+              if (rows.length > 0) {
+                initialMessages = (await hydrateMessages(d, serverId, user.id, rows)).reverse();
+              }
+            }
+          }
+
           const ready: WsMessage = {
             event: 'system.ready',
             data: {
@@ -216,6 +242,9 @@ export function setupMainWebSocket(): WebSocketServer {
               voice_states: voiceStates.map(formatVoiceState),
               activity_unread_notifications: activityUnreadNotifications,
               activity_unread_server_dms: activityUnreadServerDms,
+              initial_messages: initialMessages,
+              initial_messages_channel_id: initialChannelId,
+              initial_messages_has_more: initialHasMore,
             },
           };
           ws.send(JSON.stringify(ready));

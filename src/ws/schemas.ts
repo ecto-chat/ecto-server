@@ -11,6 +11,7 @@ export const wsMessageSchema = z.object({
 export const identifySchema = z.object({
   token: z.string(),
   protocol_version: z.number().optional(),
+  active_channel_id: z.string().uuid().optional(),
 });
 
 /** system.resume payload */
