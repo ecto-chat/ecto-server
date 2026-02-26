@@ -56,6 +56,7 @@ export const messagesRouter = router({
         content: z.string().min(1).max(4000).optional(),
         reply_to: z.string().uuid().optional(),
         attachment_ids: z.array(z.string().uuid()).optional(),
+        nonce: z.string().max(100).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -316,8 +317,9 @@ export const messagesRouter = router({
         : [];
 
       const formatted = formatMessage(row!, author, msgAttachments, []);
-      eventDispatcher.dispatchToChannel(input.channel_id, 'message.create', formatted);
-      return formatted;
+      const payload = input.nonce ? { ...formatted, nonce: input.nonce } : formatted;
+      eventDispatcher.dispatchToChannel(input.channel_id, 'message.create', payload);
+      return payload;
     }),
 
   update: protectedProcedure

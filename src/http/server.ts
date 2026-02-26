@@ -5,6 +5,7 @@ import type { Config } from '../config/index.js';
 import { appRouter } from '../trpc/router.js';
 import { createContext } from '../trpc/context.js';
 import { handleFileUpload } from './file-upload.js';
+import { handleDmFileUpload } from './dm-file-upload.js';
 import { handleSharedFileUpload } from './shared-file-upload.js';
 import { handleIconUpload, handleBannerUpload, handlePageBannerUpload } from './icon-upload.js';
 import { handleFileServe } from './file-serve.js';
@@ -97,6 +98,12 @@ export async function createServer(_config: Config) {
     // Shared file upload
     if (url.pathname === '/upload/shared' && req.method === 'POST') {
       await handleSharedFileUpload(req, res);
+      return;
+    }
+
+    // DM file upload
+    if (url.pathname === '/upload/dm' && req.method === 'POST') {
+      await handleDmFileUpload(req, res);
       return;
     }
 
