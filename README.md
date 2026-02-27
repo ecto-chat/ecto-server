@@ -2,10 +2,7 @@
 
 A self-hostable community server for [Ecto](https://ecto.chat) - the federated chat platform where users own their servers. Deploy with Docker or run standalone, connect from any Ecto client.
 
-<details>
-<summary><img src="https://img.shields.io/badge/AI--Assisted_Development_Disclosure-Claude_(Anthropic)-8A2BE2?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJ3aGl0ZSI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMCAxMCAxMCAwIDAgMCAwLTIwem0wIDE4YTggOCAwIDEgMSAwLTE2IDggOCAwIDAgMSAwIDE2eiIvPjwvc3ZnPg==" alt="AI-Assisted Development" /></summary>
-
-<br>
+<img src="https://img.shields.io/badge/AI--Assisted_Development_Disclosure-Claude_(Anthropic)-8A2BE2?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJ3aGl0ZSI+PHBhdGggZD0iTTEyIDJhMTAgMTAgMCAxIDAgMCAyMCAxMCAxMCAwIDAgMCAwLTIwem0wIDE4YTggOCAwIDEgMSAwLTE2IDggOCAwIDAgMSAwIDE2eiIvPjwvc3ZnPg==" alt="AI-Assisted Development" />
 
 > [!NOTE]
 > This project uses **Claude** (Anthropic) as a development tool. Responsible AI-assisted development means every generated contribution is reviewed, tested, and validated by the project team before merging. AI accelerates development, it does not replace engineering judgment, code review, or security auditing.
@@ -20,8 +17,6 @@ A self-hostable community server for [Ecto](https://ecto.chat) - the federated c
 > - **Password Hashing** - Argon2id for local accounts; no plaintext passwords are ever stored
 > - **Audit Logging** - Every administrative action (kicks, bans, role changes, channel edits) logged with actor, target, and timestamp
 > - **WebSocket Handshake Security** - 10-second identify deadline, protocol version validation, 90-second heartbeat timeout, and event buffering with sequence numbers for reconnect recovery
-
-</details>
 
 ---
 
