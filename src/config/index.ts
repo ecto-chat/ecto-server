@@ -19,6 +19,8 @@ const envSchema = z.object({
   STORAGE_QUOTA_BYTES: z.coerce.number().default(0),
   // Per-file max upload size in bytes (0 = use server_config value)
   MAX_UPLOAD_SIZE_BYTES: z.coerce.number().default(0),
+  // Shared secret for syncing metadata to central
+  CENTRAL_SYNC_KEY: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;

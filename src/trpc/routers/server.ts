@@ -31,6 +31,7 @@ import { resolveUserProfile, resolveUserProfiles } from '../../utils/resolve-pro
 import { voiceStateManager } from '../../services/voice-state.js';
 import { WsCloseCode } from 'ecto-shared';
 import { presenceManager } from '../../services/presence.js';
+import { syncServerMetadataToCentral } from '../../services/central-metadata-sync.js';
 
 export const serverRouter = router({
   info: publicProcedure
@@ -115,6 +116,7 @@ export const serverRouter = router({
         .limit(1);
       const formatted = formatServer(updated!);
       eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatted);
+      syncServerMetadataToCentral(formatted);
       return formatted;
     }),
 
@@ -448,6 +450,7 @@ export const serverRouter = router({
       const [updated] = await ctx.db.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
       const formatted = formatServer(updated!);
       eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatted);
+      syncServerMetadataToCentral(formatted);
       return { icon_url: input.icon_url };
     }),
 });
