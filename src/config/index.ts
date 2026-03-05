@@ -21,6 +21,9 @@ const envSchema = z.object({
   MAX_UPLOAD_SIZE_BYTES: z.coerce.number().default(0),
   // Shared secret for syncing metadata to central
   CENTRAL_SYNC_KEY: z.string().optional(),
+  // TLS cert/key paths for HTTPS (Cloudflare Origin Certificate)
+  TLS_CERT_PATH: z.string().optional(),
+  TLS_KEY_PATH: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;

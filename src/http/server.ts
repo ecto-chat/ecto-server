@@ -1,4 +1,6 @@
 import http from 'node:http';
+import https from 'node:https';
+import fs from 'node:fs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createHTTPHandler } from '@trpc/server/adapters/standalone';
 import { eq } from 'drizzle-orm';
@@ -30,7 +32,7 @@ export async function createServer(_config: Config) {
     },
   });
 
-  const server = http.createServer(async (req, res) => {
+  const requestHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, HEAD, OPTIONS');
@@ -208,7 +210,15 @@ export async function createServer(_config: Config) {
 
     // tRPC handler
     trpcHandler(req, res);
-  });
+  };
+
+  // Create HTTP or HTTPS server depending on TLS config
+  const server = _config.TLS_CERT_PATH && _config.TLS_KEY_PATH
+    ? https.createServer(
+        { cert: fs.readFileSync(_config.TLS_CERT_PATH), key: fs.readFileSync(_config.TLS_KEY_PATH) },
+        requestHandler,
+      )
+    : http.createServer(requestHandler);
 
   // WebSocket upgrade
   const mainWss = setupMainWebSocket();
