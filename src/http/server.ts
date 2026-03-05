@@ -1,5 +1,7 @@
 import http from 'node:http';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createHTTPHandler } from '@trpc/server/adapters/standalone';
+import { eq } from 'drizzle-orm';
 import { config } from '../config/index.js';
 import type { Config } from '../config/index.js';
 import { appRouter } from '../trpc/router.js';
@@ -7,11 +9,16 @@ import { createContext } from '../trpc/context.js';
 import { handleFileUpload } from './file-upload.js';
 import { handleDmFileUpload } from './dm-file-upload.js';
 import { handleSharedFileUpload } from './shared-file-upload.js';
-import { handleIconUpload, handleBannerUpload, handlePageBannerUpload } from './icon-upload.js';
+import { handleIconUpload, handleBannerUpload, handlePageBannerUpload, handleNewsHeroUpload } from './icon-upload.js';
 import { handleFileServe } from './file-serve.js';
 import { handleWebhookExecute } from './webhook-execute.js';
 import { setupMainWebSocket } from '../ws/main-ws.js';
 import { setupNotifyWebSocket } from '../ws/notify-ws.js';
+import { db } from '../db/index.js';
+import { serverConfig, servers } from '../db/schema/index.js';
+import { formatServer } from '../utils/format.js';
+import { readBody } from '../utils/http.js';
+import { eventDispatcher } from '../ws/event-dispatcher.js';
 
 export async function createServer(_config: Config) {
   const trpcHandler = createHTTPHandler({
@@ -95,6 +102,12 @@ export async function createServer(_config: Config) {
       return;
     }
 
+    // News hero image upload
+    if (url.pathname.startsWith('/upload/news-hero/') && req.method === 'POST') {
+      await handleNewsHeroUpload(req, res, url.pathname.split('/')[3] ?? '');
+      return;
+    }
+
     // Shared file upload
     if (url.pathname === '/upload/shared' && req.method === 'POST') {
       await handleSharedFileUpload(req, res);
@@ -122,6 +135,74 @@ export async function createServer(_config: Config) {
     // Webhook execution
     if (url.pathname.startsWith('/webhooks/') && req.method === 'POST') {
       await handleWebhookExecute(req, res, url);
+      return;
+    }
+
+    // Discovery status push from central (approval/rejection)
+    if (url.pathname === '/api/discovery-status' && req.method === 'POST') {
+      try {
+        if (!config.CENTRAL_SYNC_KEY) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Discovery sync not configured' }));
+          return;
+        }
+        const body = await readBody(req);
+
+        // Verify HMAC signature (central signs with shared secret, never sends it)
+        const sigHeader = req.headers['x-signature'];
+        const tsHeader = req.headers['x-timestamp'];
+        if (!sigHeader || !tsHeader) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing signature' }));
+          return;
+        }
+        const ts = Array.isArray(tsHeader) ? tsHeader[0]! : tsHeader;
+        const tsNum = Number(ts);
+        // Reject if timestamp is invalid or more than 5 minutes old
+        if (!Number.isFinite(tsNum) || Math.abs(Date.now() / 1000 - tsNum) > 300) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Timestamp expired' }));
+          return;
+        }
+        const expected = createHmac('sha256', config.CENTRAL_SYNC_KEY)
+          .update(`${ts}.${body}`)
+          .digest('hex');
+        const sig = Array.isArray(sigHeader) ? sigHeader[0]! : sigHeader;
+        const sigBuf = Buffer.from(sig);
+        const expectedBuf = Buffer.from(expected);
+        if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid signature' }));
+          return;
+        }
+
+        const data = JSON.parse(body) as { approved?: boolean };
+        const approved = data.approved ?? false;
+
+        const d = db();
+
+        // Resolve target server: use x-server-address (gateway multi-tenant) or fall back to single server
+        const serverAddress = req.headers['x-server-address'];
+        let serverRow;
+        if (serverAddress) {
+          const addr = Array.isArray(serverAddress) ? serverAddress[0]! : serverAddress;
+          [serverRow] = await d.select().from(servers).where(eq(servers.address, addr)).limit(1);
+        } else {
+          [serverRow] = await d.select().from(servers).limit(1);
+        }
+
+        if (serverRow) {
+          await d.update(serverConfig).set({ discoveryApproved: approved, updatedAt: new Date() }).where(eq(serverConfig.serverId, serverRow.id));
+          const [cfg] = await d.select().from(serverConfig).where(eq(serverConfig.serverId, serverRow.id)).limit(1);
+          eventDispatcher.dispatchToServer(serverRow.id, 'server.update', formatServer(serverRow, cfg));
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
       return;
     }
 

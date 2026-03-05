@@ -1,0 +1,1 @@
+ALTER TABLE "server_config" ADD COLUMN "discovery_approved" boolean DEFAULT false NOT NULL;

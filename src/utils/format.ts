@@ -38,7 +38,7 @@ export function formatServer(
     adminUserId: string | null;
     defaultChannelId: string | null;
   },
-  srvConfig?: { setupCompleted: boolean; allowMemberDms?: boolean },
+  srvConfig?: { setupCompleted: boolean; allowMemberDms?: boolean; discoverable?: boolean; discoveryApproved?: boolean },
 ): Server {
   return {
     id: row.id,
@@ -53,6 +53,10 @@ export function formatServer(
     default_channel_id: row.defaultChannelId ?? null,
     allow_member_dms: srvConfig?.allowMemberDms ?? false,
     hosting_mode: config.HOSTING_MODE,
+    ...(srvConfig && {
+      discoverable: srvConfig.discoverable ?? false,
+      discovery_approved: srvConfig.discoveryApproved ?? false,
+    }),
   };
 }
 
@@ -72,7 +76,7 @@ export function formatChannel(row: {
     server_id: row.serverId,
     category_id: row.categoryId,
     name: row.name,
-    type: row.type as 'text' | 'voice' | 'page',
+    type: row.type as 'text' | 'voice' | 'page' | 'news',
     topic: row.topic,
     position: row.position,
     slowmode_seconds: row.slowmodeSeconds,

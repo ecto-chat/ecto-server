@@ -1,0 +1,1 @@
+ALTER TABLE "news_posts" ADD COLUMN "discovery_validation_errors" json;

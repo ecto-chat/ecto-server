@@ -24,3 +24,5 @@ export { sharedFolders } from './shared-folders.js';
 export { sharedFiles } from './shared-files.js';
 export { sharedItemPermissionOverrides } from './shared-item-permission-overrides.js';
 export { activityItems } from './activity-items.js';
+export { newsPosts } from './news-posts.js';
+export { newsComments } from './news-comments.js';

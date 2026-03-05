@@ -170,6 +170,81 @@ export async function handlePageBannerUpload(req: IncomingMessage, res: ServerRe
   }
 }
 
+export async function handleNewsHeroUpload(req: IncomingMessage, res: ServerResponse, channelId: string) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+
+    const user = await verifyToken(authHeader.slice(7));
+    const d = db();
+    const serverId = await resolveServerId(req);
+
+    // Verify channel exists and is a news channel
+    const [ch] = await d
+      .select({ type: channels.type })
+      .from(channels)
+      .where(and(eq(channels.id, channelId), eq(channels.serverId, serverId)))
+      .limit(1);
+
+    if (!ch || ch.type !== 'news') {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Channel is not a news channel' }));
+      return;
+    }
+
+    await requirePermission(d, serverId, user.id, Permissions.MANAGE_NEWS, channelId);
+
+    const contentType = req.headers['content-type'] ?? '';
+    const boundaryMatch = contentType.match(/boundary=(.+)/);
+    if (!boundaryMatch) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Expected multipart/form-data' }));
+      return;
+    }
+
+    const { file } = await parseMultipart(req, boundaryMatch[1]!);
+    if (!file) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'No file provided' }));
+      return;
+    }
+
+    if (!file.contentType.startsWith('image/')) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'File must be an image' }));
+      return;
+    }
+
+    // Max 2MB for hero images
+    if (file.data.length > 2 * 1024 * 1024) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Hero image must be under 2MB' }));
+      return;
+    }
+
+    const heroId = generateUUIDv7();
+    const ext = file.filename.includes('.') ? file.filename.slice(file.filename.lastIndexOf('.')) : '.png';
+    const heroFilename = `hero-${heroId}${ext}`;
+    const storageKey = `${serverId}/news-heroes/${heroFilename}`;
+    const savedUrl = await fileStorage.save(storageKey, file.data, file.contentType);
+
+    const heroUrl = savedUrl.startsWith('http')
+      ? savedUrl
+      : `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host ?? 'localhost'}${savedUrl}`;
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ hero_url: heroUrl }));
+  } catch (err) {
+    console.error('News hero upload error:', err);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Upload failed' }));
+  }
+}
+
 export async function handleIconUpload(req: IncomingMessage, res: ServerResponse) {
   try {
     const authHeader = req.headers.authorization;

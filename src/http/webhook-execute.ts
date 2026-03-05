@@ -4,22 +4,8 @@ import { webhooks, messages, channels } from '../db/schema/index.js';
 import { eq, and } from 'drizzle-orm';
 import { generateUUIDv7, parseMentions, MessageType } from 'ecto-shared';
 import { formatMessage, formatMessageAuthor } from '../utils/format.js';
+import { readBody } from '../utils/http.js';
 import { eventDispatcher } from '../ws/event-dispatcher.js';
-
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (chunk: Buffer) => {
-      data += chunk.toString();
-      if (data.length > 1_000_000) {
-        reject(new Error('Body too large'));
-        req.destroy();
-      }
-    });
-    req.on('end', () => resolve(data));
-    req.on('error', reject);
-  });
-}
 
 function jsonResponse(res: http.ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json' });

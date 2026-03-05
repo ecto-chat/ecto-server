@@ -12,6 +12,8 @@ export const serverConfig = pgTable('server_config', {
   showSystemMessages: boolean('show_system_messages').notNull().default(true),
   maxUploadSizeBytes: integer('max_upload_size_bytes').notNull().default(5242880),
   maxSharedStorageBytes: bigint('max_shared_storage_bytes', { mode: 'number' }).notNull().default(104857600),
+  discoverable: boolean('discoverable').notNull().default(false),
+  discoveryApproved: boolean('discovery_approved').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

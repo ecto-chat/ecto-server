@@ -62,7 +62,7 @@ export const channelsRouter = router({
     .input(
       z.object({
         name: z.string().min(1).max(100),
-        type: z.enum(['text', 'voice', 'page']),
+        type: z.enum(['text', 'voice', 'page', 'news']),
         category_id: z.string().uuid().optional(),
         topic: z.string().max(1024).optional(),
         slowmode_seconds: z.number().int().min(0).max(3600).optional(),

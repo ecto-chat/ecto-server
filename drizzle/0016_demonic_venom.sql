@@ -1,0 +1,1 @@
+ALTER TABLE "news_posts" ADD COLUMN "submitted_to_discovery" boolean DEFAULT false NOT NULL;

@@ -70,8 +70,8 @@ export const messagesRouter = router({
         .from(channels)
         .where(eq(channels.id, input.channel_id))
         .limit(1);
-      if (ch?.type === 'page') {
-        throw ectoError('BAD_REQUEST', 3002, 'Cannot send messages to a page channel');
+      if (ch?.type === 'page' || ch?.type === 'news') {
+        throw ectoError('BAD_REQUEST', 3002, 'Cannot send messages to a page or news channel');
       }
 
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.SEND_MESSAGES, input.channel_id);

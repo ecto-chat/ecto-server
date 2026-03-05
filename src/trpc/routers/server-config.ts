@@ -8,6 +8,7 @@ import { formatServer } from '../../utils/format.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
+import { registerDiscoverableServer, unregisterFromCentralDiscovery } from '../../services/central-news-sync.js';
 
 export const serverConfigRouter = router({
   get: protectedProcedure.query(async ({ ctx }) => {
@@ -28,6 +29,8 @@ export const serverConfigRouter = router({
       require_invite: cfg.requireInvite,
       allow_member_dms: cfg.allowMemberDms,
       show_system_messages: cfg.showSystemMessages,
+      discoverable: cfg.discoverable,
+      discovery_approved: cfg.discoveryApproved,
       version: '0.1.0',
     };
   }),
@@ -41,6 +44,7 @@ export const serverConfigRouter = router({
         require_invite: z.boolean().optional(),
         allow_member_dms: z.boolean().optional(),
         show_system_messages: z.boolean().optional(),
+        discoverable: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -53,6 +57,7 @@ export const serverConfigRouter = router({
       if (input.require_invite !== undefined) updates['requireInvite'] = input.require_invite;
       if (input.allow_member_dms !== undefined) updates['allowMemberDms'] = input.allow_member_dms;
       if (input.show_system_messages !== undefined) updates['showSystemMessages'] = input.show_system_messages;
+      if (input.discoverable !== undefined) updates['discoverable'] = input.discoverable;
 
       await ctx.db.update(serverConfig).set(updates).where(eq(serverConfig.serverId, ctx.serverId));
 
@@ -65,11 +70,31 @@ export const serverConfigRouter = router({
         details: { config: input },
       });
 
-      // Broadcast full server object so clients get consistent payloads
+      // Register/unregister with central discovery when discoverable changes
       const [serverRow] = await ctx.db.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
-      const [updatedCfg] = await ctx.db.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
+      if (input.discoverable !== undefined && serverRow) {
+        if (input.discoverable) {
+          const approved = await registerDiscoverableServer({
+            server_id: ctx.serverId,
+            address: serverRow.address ?? '',
+            name: serverRow.name,
+            description: serverRow.description,
+            icon_url: serverRow.iconUrl,
+            banner_url: serverRow.bannerUrl,
+          });
+          if (approved !== null) {
+            await ctx.db.update(serverConfig).set({ discoveryApproved: approved, updatedAt: new Date() }).where(eq(serverConfig.serverId, ctx.serverId));
+          }
+        } else {
+          unregisterFromCentralDiscovery(ctx.serverId);
+          await ctx.db.update(serverConfig).set({ discoveryApproved: false, updatedAt: new Date() }).where(eq(serverConfig.serverId, ctx.serverId));
+        }
+      }
+
+      // Single broadcast with final state (after discovery registration if applicable)
+      const [finalCfg] = await ctx.db.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
       if (serverRow) {
-        eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatServer(serverRow, updatedCfg));
+        eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatServer(serverRow, finalCfg));
       }
 
       return { success: true };
