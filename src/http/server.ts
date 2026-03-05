@@ -220,6 +220,15 @@ export async function createServer(_config: Config) {
       )
     : http.createServer(requestHandler);
 
+  // When TLS is enabled, create a plain HTTP server for internal/private-network traffic
+  let internalHttpServer: http.Server | undefined;
+  if (_config.TLS_CERT_PATH && _config.TLS_KEY_PATH && _config.INTERNAL_HTTP_PORT) {
+    internalHttpServer = http.createServer(requestHandler);
+    internalHttpServer.listen(_config.INTERNAL_HTTP_PORT, () => {
+      console.log(`Internal HTTP listening on port ${_config.INTERNAL_HTTP_PORT}`);
+    });
+  }
+
   // WebSocket upgrade
   const mainWss = setupMainWebSocket();
   const notifyWss = setupNotifyWebSocket();
@@ -240,5 +249,5 @@ export async function createServer(_config: Config) {
     }
   });
 
-  return server;
+  return Object.assign(server, { internalHttpServer });
 }

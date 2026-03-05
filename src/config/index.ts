@@ -24,6 +24,8 @@ const envSchema = z.object({
   // TLS cert/key paths for HTTPS (Cloudflare Origin Certificate)
   TLS_CERT_PATH: z.string().optional(),
   TLS_KEY_PATH: z.string().optional(),
+  // Plain HTTP port for internal/private-network traffic when TLS is enabled
+  INTERNAL_HTTP_PORT: z.coerce.number().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
