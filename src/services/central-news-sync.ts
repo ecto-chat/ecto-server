@@ -96,6 +96,7 @@ export async function registerDiscoverableServer(data: {
   description: string | null;
   icon_url: string | null;
   banner_url: string | null;
+  tags: string[];
 }): Promise<boolean | null> {
   if (!config.CENTRAL_URL || !config.CENTRAL_SYNC_KEY) return null;
 

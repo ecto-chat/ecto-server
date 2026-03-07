@@ -1,4 +1,4 @@
-import { pgTable, uuid, boolean, integer, bigint, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, boolean, integer, bigint, timestamp, json } from 'drizzle-orm/pg-core';
 import { servers } from './servers.js';
 
 export const serverConfig = pgTable('server_config', {
@@ -14,6 +14,7 @@ export const serverConfig = pgTable('server_config', {
   maxSharedStorageBytes: bigint('max_shared_storage_bytes', { mode: 'number' }).notNull().default(104857600),
   discoverable: boolean('discoverable').notNull().default(false),
   discoveryApproved: boolean('discovery_approved').notNull().default(false),
+  tags: json('tags').$type<string[]>().default([]),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

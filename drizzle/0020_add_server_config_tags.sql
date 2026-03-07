@@ -1,0 +1,1 @@
+ALTER TABLE "server_config" ADD COLUMN "tags" json DEFAULT '[]'::json;

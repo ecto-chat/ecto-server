@@ -134,6 +134,20 @@
       "when": 1772658517051,
       "tag": "0018_vengeful_cyclops",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1772870400000,
+      "tag": "0019_normalize_channel_names",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1772898254953,
+      "tag": "0020_add_server_config_tags",
+      "breakpoints": true
     }
   ]
 }

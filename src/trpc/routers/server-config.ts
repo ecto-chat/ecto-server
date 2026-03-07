@@ -31,6 +31,7 @@ export const serverConfigRouter = router({
       show_system_messages: cfg.showSystemMessages,
       discoverable: cfg.discoverable,
       discovery_approved: cfg.discoveryApproved,
+      tags: (cfg.tags as string[] | null) ?? [],
       version: '0.1.0',
     };
   }),
@@ -45,6 +46,7 @@ export const serverConfigRouter = router({
         allow_member_dms: z.boolean().optional(),
         show_system_messages: z.boolean().optional(),
         discoverable: z.boolean().optional(),
+        tags: z.array(z.string().max(30).transform((s) => s.trim().toLowerCase())).max(10).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -58,6 +60,7 @@ export const serverConfigRouter = router({
       if (input.allow_member_dms !== undefined) updates['allowMemberDms'] = input.allow_member_dms;
       if (input.show_system_messages !== undefined) updates['showSystemMessages'] = input.show_system_messages;
       if (input.discoverable !== undefined) updates['discoverable'] = input.discoverable;
+      if (input.tags !== undefined) updates['tags'] = input.tags;
 
       await ctx.db.update(serverConfig).set(updates).where(eq(serverConfig.serverId, ctx.serverId));
 
@@ -70,10 +73,14 @@ export const serverConfigRouter = router({
         details: { config: input },
       });
 
-      // Register/unregister with central discovery when discoverable changes
+      // Register/unregister with central discovery when discoverable or tags change
       const [serverRow] = await ctx.db.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
-      if (input.discoverable !== undefined && serverRow) {
-        if (input.discoverable) {
+      if (serverRow && (input.discoverable !== undefined || input.tags !== undefined)) {
+        const [currentCfg] = await ctx.db.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
+        const isDiscoverable = currentCfg?.discoverable ?? false;
+
+        if (isDiscoverable) {
+          // Server is discoverable — (re-)register to sync latest data + tags
           const approved = await registerDiscoverableServer({
             server_id: ctx.serverId,
             address: serverRow.address ?? '',
@@ -81,11 +88,13 @@ export const serverConfigRouter = router({
             description: serverRow.description,
             icon_url: serverRow.iconUrl,
             banner_url: serverRow.bannerUrl,
+            tags: (currentCfg?.tags as string[] | null) ?? [],
           });
           if (approved !== null) {
             await ctx.db.update(serverConfig).set({ discoveryApproved: approved, updatedAt: new Date() }).where(eq(serverConfig.serverId, ctx.serverId));
           }
-        } else {
+        } else if (input.discoverable === false) {
+          // Just turned off discoverable — unregister
           unregisterFromCentralDiscovery(ctx.serverId);
           await ctx.db.update(serverConfig).set({ discoveryApproved: false, updatedAt: new Date() }).where(eq(serverConfig.serverId, ctx.serverId));
         }
