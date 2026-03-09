@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { categories, channels, categoryPermissionOverrides } from '../../db/schema/index.js';
 import { eq, and, max } from 'drizzle-orm';
-import { generateUUIDv7, Permissions, permissionBitfieldSchema } from 'ecto-shared';
+import { generateUUIDv7, Permissions, permissionBitfieldSchema, normalizeChannelName, channelNameSchema, EctoErrorCode } from 'ecto-shared';
 import { formatCategory } from '../../utils/format.js';
 import { requirePermission } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -11,10 +11,12 @@ import { eventDispatcher } from '../../ws/event-dispatcher.js';
 
 export const categoriesRouter = router({
   create: protectedProcedure
-    .input(z.object({ name: z.string().min(1).max(100) }))
+    .input(z.object({ name: channelNameSchema }))
     .mutation(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_CHANNELS);
       const d = ctx.db;
+      const name = normalizeChannelName(input.name);
+      if (!name) throw ectoError('BAD_REQUEST', EctoErrorCode.CHANNEL_INVALID_NAME, 'Category name is invalid');
 
       const [maxPos] = await d
         .select({ maxPosition: max(categories.position) })
@@ -26,7 +28,7 @@ export const categoriesRouter = router({
       await d.insert(categories).values({
         id,
         serverId: ctx.serverId,
-        name: input.name,
+        name,
         position,
       });
 
@@ -36,7 +38,7 @@ export const categoriesRouter = router({
         action: 'category.create',
         targetType: 'category',
         targetId: id,
-        details: { name: input.name },
+        details: { name },
       });
 
       const [row] = await d.select().from(categories).where(eq(categories.id, id)).limit(1);
@@ -48,7 +50,7 @@ export const categoriesRouter = router({
   update: protectedProcedure
     .input(z.object({
       category_id: z.string().uuid(),
-      name: z.string().min(1).max(100).optional(),
+      name: channelNameSchema.optional(),
       permission_overrides: z
         .array(
           z.object({
@@ -74,9 +76,11 @@ export const categoriesRouter = router({
 
       const formatted = await d.transaction(async (tx) => {
         if (input.name !== undefined) {
+          const normalized = normalizeChannelName(input.name);
+          if (!normalized) throw ectoError('BAD_REQUEST', EctoErrorCode.CHANNEL_INVALID_NAME, 'Category name is invalid');
           await tx
             .update(categories)
-            .set({ name: input.name })
+            .set({ name: normalized })
             .where(eq(categories.id, input.category_id));
         }
 
@@ -103,7 +107,7 @@ export const categoriesRouter = router({
           action: 'category.update',
           targetType: 'category',
           targetId: input.category_id,
-          details: { name: input.name },
+          details: { name: input.name !== undefined ? normalizeChannelName(input.name) : undefined },
         });
 
         const [updated] = await tx.select().from(categories).where(eq(categories.id, input.category_id)).limit(1);

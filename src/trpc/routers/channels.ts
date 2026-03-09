@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { channels, categories, channelPermissionOverrides, pageContents } from '../../db/schema/index.js';
 import { eq, and, max } from 'drizzle-orm';
-import { generateUUIDv7, Permissions, computePermissions, hasPermission, permissionBitfieldSchema } from 'ecto-shared';
+import { generateUUIDv7, Permissions, computePermissions, hasPermission, permissionBitfieldSchema, normalizeChannelName, channelNameSchema, EctoErrorCode } from 'ecto-shared';
 import { formatChannel, formatCategory } from '../../utils/format.js';
 import { requirePermission, requireMember, buildBatchPermissionContext } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -61,7 +61,7 @@ export const channelsRouter = router({
   create: protectedProcedure
     .input(
       z.object({
-        name: z.string().min(1).max(100),
+        name: channelNameSchema,
         type: z.enum(['text', 'voice', 'page', 'news']),
         category_id: z.string().uuid().optional(),
         topic: z.string().max(1024).optional(),
@@ -82,6 +82,8 @@ export const channelsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.MANAGE_CHANNELS);
       const d = ctx.db;
+      const name = normalizeChannelName(input.name);
+      if (!name) throw ectoError('BAD_REQUEST', EctoErrorCode.CHANNEL_INVALID_NAME, 'Channel name is invalid');
 
       const formatted = await d.transaction(async (tx) => {
         // Get next position
@@ -96,7 +98,7 @@ export const channelsRouter = router({
           id,
           serverId: ctx.serverId,
           categoryId: input.category_id ?? null,
-          name: input.name,
+          name,
           type: input.type,
           topic: input.topic ?? null,
           position,
@@ -135,7 +137,7 @@ export const channelsRouter = router({
           action: 'channel.create',
           targetType: 'channel',
           targetId: id,
-          details: { name: input.name, type: input.type },
+          details: { name, type: input.type },
         });
 
         const [row] = await tx.select().from(channels).where(eq(channels.id, id)).limit(1);
@@ -150,7 +152,7 @@ export const channelsRouter = router({
     .input(
       z.object({
         channel_id: z.string().uuid(),
-        name: z.string().min(1).max(100).optional(),
+        name: channelNameSchema.optional(),
         topic: z.string().max(1024).optional(),
         category_id: z.string().uuid().optional(),
         slowmode_seconds: z.number().int().min(0).max(3600).optional(),
@@ -180,7 +182,11 @@ export const channelsRouter = router({
       if (!ch) throw ectoError('NOT_FOUND', 3000, 'Channel not found');
 
       const updates: Record<string, unknown> = { updatedAt: new Date() };
-      if (input.name !== undefined) updates['name'] = input.name;
+      if (input.name !== undefined) {
+        const normalized = normalizeChannelName(input.name);
+        if (!normalized) throw ectoError('BAD_REQUEST', EctoErrorCode.CHANNEL_INVALID_NAME, 'Channel name is invalid');
+        updates['name'] = normalized;
+      }
       if (input.topic !== undefined) updates['topic'] = input.topic;
       if (input.category_id !== undefined) updates['categoryId'] = input.category_id;
       if (input.slowmode_seconds !== undefined) updates['slowmodeSeconds'] = input.slowmode_seconds;
