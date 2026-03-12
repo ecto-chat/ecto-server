@@ -14,6 +14,7 @@ import { handleSharedFileUpload } from './shared-file-upload.js';
 import { handleIconUpload, handleBannerUpload, handlePageBannerUpload, handleNewsHeroUpload } from './icon-upload.js';
 import { handleFileServe } from './file-serve.js';
 import { handleWebhookExecute } from './webhook-execute.js';
+import { handleLinkUnfurl } from './link-unfurl.js';
 import { handleOgImage, renderOgHtml, getServerInfo } from './og-image.js';
 import { setupMainWebSocket } from '../ws/main-ws.js';
 import { setupNotifyWebSocket } from '../ws/notify-ws.js';
@@ -166,6 +167,12 @@ export async function createServer(_config: Config) {
     // Webhook execution
     if (url.pathname.startsWith('/webhooks/') && req.method === 'POST') {
       await handleWebhookExecute(req, res, url);
+      return;
+    }
+
+    // Link unfurl / OG metadata proxy
+    if (url.pathname === '/api/unfurl' && req.method === 'GET') {
+      await handleLinkUnfurl(req, res);
       return;
     }
 
