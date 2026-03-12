@@ -14,6 +14,7 @@ import { handleSharedFileUpload } from './shared-file-upload.js';
 import { handleIconUpload, handleBannerUpload, handlePageBannerUpload, handleNewsHeroUpload } from './icon-upload.js';
 import { handleFileServe } from './file-serve.js';
 import { handleWebhookExecute } from './webhook-execute.js';
+import { handleOgImage, renderOgHtml, getServerInfo } from './og-image.js';
 import { setupMainWebSocket } from '../ws/main-ws.js';
 import { setupNotifyWebSocket } from '../ws/notify-ws.js';
 import { db } from '../db/index.js';
@@ -54,26 +55,54 @@ export async function createServer(_config: Config) {
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
-    // Browser redirect — send browsers visiting the server URL to the client app
+    // OG image endpoint
+    if (url.pathname === '/og-image' && req.method === 'GET') {
+      await handleOgImage(req, res);
+      return;
+    }
+
+    // Browser visits — serve HTML with OG tags + instant meta-refresh redirect
     if (req.method === 'GET') {
       const accept = req.headers.accept ?? '';
       if (accept.includes('text/html')) {
         const serverAddr = config.SERVER_ADDRESS ?? req.headers.host ?? '';
+        const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+        // Use the host header for OG image URL (includes port), fall back to SERVER_ADDRESS
+        const hostWithPort = req.headers.host ?? serverAddr;
+        const serverUrl = `${proto}://${hostWithPort}`;
         const clientBase = config.CLIENT_URL.replace(/\/+$/, '');
 
-        // GET /invite/:code → redirect with invite param
+        // GET /invite/:code → OG page for invite
         const inviteMatch = url.pathname.match(/^\/invite\/([^/]+)$/);
         if (inviteMatch) {
           const code = encodeURIComponent(inviteMatch[1]!);
-          res.writeHead(302, { Location: `${clientBase}?join=${encodeURIComponent(serverAddr)}&invite=${code}` });
-          res.end();
+          const info = await getServerInfo(req.headers['x-server-address'] as string | undefined);
+          const serverName = info?.name ?? 'a server';
+          const html = renderOgHtml({
+            title: `Join ${serverName} on Ecto`,
+            description: info?.description ?? 'You\'ve been invited to join a server on Ecto.',
+            imageUrl: `${serverUrl}/og-image`,
+            pageUrl: `${serverUrl}/invite/${code}`,
+            redirectUrl: `${clientBase}?join=${encodeURIComponent(serverAddr)}&invite=${code}`,
+          });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(html);
           return;
         }
 
-        // GET / → redirect to client with join param
+        // GET / → OG page for server
         if (url.pathname === '/' || url.pathname === '') {
-          res.writeHead(302, { Location: `${clientBase}?join=${encodeURIComponent(serverAddr)}` });
-          res.end();
+          const info = await getServerInfo(req.headers['x-server-address'] as string | undefined);
+          const serverName = info?.name ?? 'a server';
+          const html = renderOgHtml({
+            title: `Join ${serverName} on Ecto`,
+            description: info?.description ?? 'Click to join the server on Ecto.',
+            imageUrl: `${serverUrl}/og-image`,
+            pageUrl: serverUrl,
+            redirectUrl: `${clientBase}?join=${encodeURIComponent(serverAddr)}`,
+          });
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(html);
           return;
         }
       }

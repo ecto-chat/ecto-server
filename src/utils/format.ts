@@ -38,7 +38,7 @@ export function formatServer(
     adminUserId: string | null;
     defaultChannelId: string | null;
   },
-  srvConfig?: { setupCompleted: boolean; allowMemberDms?: boolean; discoverable?: boolean; discoveryApproved?: boolean },
+  srvConfig?: { setupCompleted: boolean; allowMemberDms?: boolean; discoverable?: boolean; discoveryApproved?: boolean; maxSharedStorageBytes?: number },
 ): Server {
   return {
     id: row.id,
@@ -53,6 +53,7 @@ export function formatServer(
     default_channel_id: row.defaultChannelId ?? null,
     allow_member_dms: srvConfig?.allowMemberDms ?? false,
     hosting_mode: config.HOSTING_MODE,
+    file_browser_enabled: (srvConfig?.maxSharedStorageBytes ?? 0) > 0,
     ...(srvConfig && {
       discoverable: srvConfig.discoverable ?? false,
       discovery_approved: srvConfig.discoveryApproved ?? false,

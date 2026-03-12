@@ -10,6 +10,8 @@ import { generateInviteCode } from '../../utils/invite-code.js';
 import { formatInvite } from '../../utils/format.js';
 import { resolveUserProfiles } from '../../utils/resolve-profile.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
+import { registerInviteWithCentral, unregisterInviteFromCentral } from '../../services/central-invite-sync.js';
+import { config } from '../../config/index.js';
 
 export const invitesRouter = router({
   create: protectedProcedure
@@ -50,10 +52,21 @@ export const invitesRouter = router({
 
       const invite = formatInvite(row!, profile?.username ?? 'Unknown');
       eventDispatcher.dispatchToServer(ctx.serverId, 'invite.create', invite);
-      return {
-        invite,
-        url: `ecto://${code}`,
-      };
+
+      if (config.SERVER_ADDRESS) {
+        registerInviteWithCentral(code, ctx.serverId, config.SERVER_ADDRESS, expiresAt);
+      }
+
+      // In production, CLIENT_URL is https://app.ecto.chat and the canonical
+      // invite URL goes through the Cloudflare Worker at ecto.chat.
+      // In local dev, CLIENT_URL is http://localhost:8080 and the invite URL
+      // goes directly to the client with a ?invite= query param.
+      const isLocalDev = config.CLIENT_URL.includes('localhost');
+      const url = isLocalDev
+        ? `${config.CLIENT_URL}?invite=${code}`
+        : `https://ecto.chat/invite/${code}`;
+
+      return { invite, url };
     }),
 
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -95,6 +108,9 @@ export const invitesRouter = router({
       });
 
       eventDispatcher.dispatchToServer(ctx.serverId, 'invite.delete', { id: input.invite_id });
+
+      unregisterInviteFromCentral(invite.code, ctx.serverId);
+
       return { success: true };
     }),
 });

@@ -26,3 +26,4 @@ export { sharedItemPermissionOverrides } from './shared-item-permission-override
 export { activityItems } from './activity-items.js';
 export { newsPosts } from './news-posts.js';
 export { newsComments } from './news-comments.js';
+export { customDomains } from './custom-domains.js';
