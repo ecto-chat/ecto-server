@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { serverConfig, servers } from '../../db/schema/index.js';
 import { eq } from 'drizzle-orm';
-import { Permissions } from 'ecto-shared';
+import { Permissions, ServerWsEvents } from 'ecto-shared';
 import { requirePermission } from '../../utils/permission-context.js';
 import { formatServer } from '../../utils/format.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -103,7 +103,7 @@ export const serverConfigRouter = router({
       // Single broadcast with final state (after discovery registration if applicable)
       const [finalCfg] = await ctx.db.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
       if (serverRow) {
-        eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatServer(serverRow, finalCfg));
+        eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SERVER_UPDATE, formatServer(serverRow, finalCfg));
       }
 
       return { success: true };
@@ -139,7 +139,7 @@ export const serverConfigRouter = router({
     const [serverRow] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
     const [updatedCfg] = await d.select().from(serverConfig).where(eq(serverConfig.serverId, ctx.serverId)).limit(1);
     if (serverRow) {
-      eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatServer(serverRow, updatedCfg));
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SERVER_UPDATE, formatServer(serverRow, updatedCfg));
     }
 
     return { success: true };

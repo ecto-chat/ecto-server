@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { channels, categories, channelPermissionOverrides, pageContents } from '../../db/schema/index.js';
 import { eq, and, max } from 'drizzle-orm';
-import { generateUUIDv7, Permissions, computePermissions, hasPermission, permissionBitfieldSchema, normalizeChannelName, channelNameSchema, EctoErrorCode } from 'ecto-shared';
+import { generateUUIDv7, Permissions, computePermissions, hasPermission, permissionBitfieldSchema, normalizeChannelName, channelNameSchema, EctoErrorCode, ServerWsEvents } from 'ecto-shared';
 import { formatChannel, formatCategory } from '../../utils/format.js';
 import { requirePermission, requireMember, buildBatchPermissionContext } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -144,7 +144,7 @@ export const channelsRouter = router({
         return formatChannel(row!);
       });
 
-      eventDispatcher.dispatchToServer(ctx.serverId, 'channel.create', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CHANNEL_CREATE, formatted);
       return formatted;
     }),
 
@@ -225,9 +225,9 @@ export const channelsRouter = router({
         return formatChannel(updated!);
       });
 
-      eventDispatcher.dispatchToServer(ctx.serverId, 'channel.update', updatedFormatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CHANNEL_UPDATE, updatedFormatted);
       if (input.permission_overrides) {
-        eventDispatcher.dispatchToServer(ctx.serverId, 'permissions.update', { type: 'channel', id: input.channel_id });
+        eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.PERMISSIONS_UPDATE, { type: 'channel', id: input.channel_id });
       }
       return updatedFormatted;
     }),
@@ -262,7 +262,7 @@ export const channelsRouter = router({
         details: { name: ch.name },
       });
 
-      eventDispatcher.dispatchToServer(ctx.serverId, 'channel.delete', { id: input.channel_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CHANNEL_DELETE, { id: input.channel_id });
       return { success: true };
     }),
 
@@ -319,7 +319,7 @@ export const channelsRouter = router({
         .select()
         .from(channels)
         .where(eq(channels.serverId, ctx.serverId));
-      eventDispatcher.dispatchToServer(ctx.serverId, 'channel.reorder', allChannels.map(formatChannel));
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CHANNEL_REORDER, allChannels.map(formatChannel));
 
       return { success: true };
     }),

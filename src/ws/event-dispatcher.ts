@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { WsMessage } from 'ecto-shared';
+import type { WsMessage, ServerDispatchEvent, ServerEventPayload } from 'ecto-shared';
 
 export interface WsSession {
   sessionId: string;
@@ -18,10 +18,10 @@ export interface IEventDispatcher {
   removeSession(sessionId: string): void;
   subscribe(sessionId: string, channelId: string): void;
   unsubscribe(sessionId: string, channelId: string): void;
-  dispatchToChannel(channelId: string, event: string, data: unknown): void;
-  dispatchToAll(event: string, data: unknown): void;
-  dispatchToServer(serverId: string, event: string, data: unknown): void;
-  dispatchToUser(userId: string, event: string, data: unknown): void;
+  dispatchToChannel<E extends ServerDispatchEvent['event']>(channelId: string, event: E, data: ServerEventPayload<E>): void;
+  dispatchToAll<E extends ServerDispatchEvent['event']>(event: E, data: ServerEventPayload<E>): void;
+  dispatchToServer<E extends ServerDispatchEvent['event']>(serverId: string, event: E, data: ServerEventPayload<E>): void;
+  dispatchToUser<E extends ServerDispatchEvent['event']>(userId: string, event: E, data: ServerEventPayload<E>): void;
   getEventBuffer(sessionId: string, afterSeq: number): { seq: number; event: string; data: unknown }[];
   disconnectUser(userId: string, closeCode: number, reason: string): void;
   disconnectAll(closeCode: number, reason: string): void;
@@ -119,7 +119,7 @@ export class MemoryEventDispatcher implements IEventDispatcher {
     }
   }
 
-  dispatchToChannel(channelId: string, event: string, data: unknown) {
+  dispatchToChannel<E extends ServerDispatchEvent['event']>(channelId: string, event: E, data: ServerEventPayload<E>) {
     const sessionIds = this.channelSessions.get(channelId);
     if (!sessionIds) return;
     for (const sid of sessionIds) {
@@ -130,7 +130,7 @@ export class MemoryEventDispatcher implements IEventDispatcher {
     }
   }
 
-  dispatchToAll(event: string, data: unknown) {
+  dispatchToAll<E extends ServerDispatchEvent['event']>(event: E, data: ServerEventPayload<E>) {
     for (const session of this.sessions.values()) {
       if (session.authenticated) {
         this.send(session, event, data);
@@ -138,7 +138,7 @@ export class MemoryEventDispatcher implements IEventDispatcher {
     }
   }
 
-  dispatchToServer(serverId: string, event: string, data: unknown) {
+  dispatchToServer<E extends ServerDispatchEvent['event']>(serverId: string, event: E, data: ServerEventPayload<E>) {
     for (const session of this.sessions.values()) {
       if (session.authenticated && session.serverId === serverId) {
         this.send(session, event, data);
@@ -146,7 +146,7 @@ export class MemoryEventDispatcher implements IEventDispatcher {
     }
   }
 
-  dispatchToUser(userId: string, event: string, data: unknown) {
+  dispatchToUser<E extends ServerDispatchEvent['event']>(userId: string, event: E, data: ServerEventPayload<E>) {
     const sessionIds = this.userSessions.get(userId);
     if (!sessionIds) return;
     for (const sid of sessionIds) {

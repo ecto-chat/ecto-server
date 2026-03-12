@@ -4,7 +4,7 @@ import { router, protectedProcedure } from '../init.js';
 import { members, memberRoles, roles, bans, messages, servers, localUsers, cachedProfiles, readStates, channels, dmConversations, dmReadStates } from '../../db/schema/index.js';
 import { signServerToken } from '../../utils/jwt.js';
 import { eq, and, count, ilike, or, lt, desc, inArray, sql } from 'drizzle-orm';
-import { generateUUIDv7, Permissions } from 'ecto-shared';
+import { generateUUIDv7, Permissions, ServerWsEvents } from 'ecto-shared';
 import { formatMember } from '../../utils/format.js';
 import { requirePermission, requireMember, buildPermissionContext } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -23,7 +23,7 @@ function cleanupAndDisconnect(userId: string, serverId: string, closeCode: numbe
 
   // Presence cleanup — remove entry entirely (offline status is broadcast below)
   presenceManager.remove(userId);
-  eventDispatcher.dispatchToServer(serverId, 'presence.update', {
+  eventDispatcher.dispatchToServer(serverId, ServerWsEvents.PRESENCE_UPDATE, {
     user_id: userId,
     status: 'offline',
     custom_text: null,
@@ -211,7 +211,7 @@ export const membersRouter = router({
       });
 
       // Broadcast and cleanup after transaction commits
-      eventDispatcher.dispatchToServer(ctx.serverId, 'member.leave', { user_id: input.user_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.MEMBER_LEAVE, { user_id: input.user_id });
       cleanupAndDisconnect(input.user_id, ctx.serverId, 4003, 'Kicked');
       return { success: true };
     }),
@@ -279,7 +279,7 @@ export const membersRouter = router({
       });
 
       // Broadcast and cleanup after transaction commits
-      eventDispatcher.dispatchToServer(ctx.serverId, 'member.leave', { user_id: input.user_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.MEMBER_LEAVE, { user_id: input.user_id });
       cleanupAndDisconnect(input.user_id, ctx.serverId, 4003, 'Banned');
       return { success: true };
     }),
@@ -347,7 +347,7 @@ export const membersRouter = router({
       const [memberRow] = await d.select().from(members).where(eq(members.id, target.id)).limit(1);
       const profile = (await resolveUserProfiles(d, [input.user_id])).get(input.user_id) ?? { username: 'Unknown', display_name: null, avatar_url: null };
       const formatted = formatMember(memberRow!, profile, allRoleIds);
-      eventDispatcher.dispatchToServer(ctx.serverId, 'member.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.MEMBER_UPDATE, formatted);
       return formatted;
     }),
 
@@ -368,7 +368,7 @@ export const membersRouter = router({
       const profile = (await resolveUserProfiles(d, [input.user_id])).get(input.user_id) ?? { username: 'Unknown', display_name: null, avatar_url: null };
       const mrRows = await d.select({ roleId: memberRoles.roleId }).from(memberRoles).where(eq(memberRoles.memberId, target.id));
       const formatted = formatMember(memberRow!, profile, mrRows.map((r) => r.roleId));
-      eventDispatcher.dispatchToServer(ctx.serverId, 'member.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.MEMBER_UPDATE, formatted);
       return formatted;
     }),
 
@@ -399,7 +399,7 @@ export const membersRouter = router({
 
       const updated = voiceStateManager.getByUser(input.user_id)!;
       const formatted = formatVoiceState(updated);
-      eventDispatcher.dispatchToServer(ctx.serverId, 'voice.state_update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.VOICE_STATE_UPDATE, formatted);
       return formatted;
     }),
 
@@ -463,7 +463,7 @@ export const membersRouter = router({
           .from(memberRoles)
           .where(eq(memberRoles.memberId, memberRow.id));
         const formatted = formatMember(memberRow, profile, mrRows.map((r) => r.roleId));
-        eventDispatcher.dispatchToServer(ctx.serverId, 'member.update', formatted);
+        eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.MEMBER_UPDATE, formatted);
       }
 
       return { success: true };

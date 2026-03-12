@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { channels, pageContents, pageRevisions } from '../../db/schema/index.js';
 import { eq, and, desc, lt } from 'drizzle-orm';
-import { generateUUIDv7, Permissions } from 'ecto-shared';
+import { generateUUIDv7, Permissions, ServerWsEvents } from 'ecto-shared';
 import { requirePermission } from '../../utils/permission-context.js';
 import { ectoError } from '../../utils/errors.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
@@ -133,7 +133,7 @@ export const pagesRouter = router({
       });
 
       // Broadcast to all clients subscribed to this channel
-      eventDispatcher.dispatchToChannel(input.channel_id, 'page.update', result);
+      eventDispatcher.dispatchToChannel(input.channel_id, ServerWsEvents.PAGE_UPDATE, result);
 
       return result;
     }),
@@ -178,7 +178,7 @@ export const pagesRouter = router({
           edited_by: updated.editedBy,
           edited_at: updated.editedAt.toISOString(),
         };
-        eventDispatcher.dispatchToChannel(input.channel_id, 'page.update', payload);
+        eventDispatcher.dispatchToChannel(input.channel_id, ServerWsEvents.PAGE_UPDATE, payload);
       }
 
       return { banner_url: input.banner_url };

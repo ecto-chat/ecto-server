@@ -30,20 +30,19 @@ export async function loginLocal(
   d: Db,
   input: { username: string; password: string },
 ): Promise<{ id: string; username: string }> {
-  const [user] = await d
+  const users = await d
     .select()
     .from(localUsers)
-    .where(eq(localUsers.username, input.username))
-    .limit(1);
+    .where(eq(localUsers.username, input.username));
 
-  if (!user) {
+  if (users.length === 0) {
     throw ectoError('UNAUTHORIZED', 1000, 'Invalid credentials');
   }
 
-  const valid = await argon2.verify(user.passwordHash, input.password);
-  if (!valid) {
-    throw ectoError('UNAUTHORIZED', 1000, 'Invalid credentials');
+  for (const user of users) {
+    const valid = await argon2.verify(user.passwordHash, input.password);
+    if (valid) return { id: user.id, username: user.username };
   }
 
-  return { id: user.id, username: user.username };
+  throw ectoError('UNAUTHORIZED', 1000, 'Invalid credentials');
 }

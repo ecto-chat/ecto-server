@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { categories, channels, categoryPermissionOverrides } from '../../db/schema/index.js';
 import { eq, and, max } from 'drizzle-orm';
-import { generateUUIDv7, Permissions, permissionBitfieldSchema, normalizeChannelName, channelNameSchema, EctoErrorCode } from 'ecto-shared';
+import { generateUUIDv7, Permissions, permissionBitfieldSchema, normalizeChannelName, channelNameSchema, EctoErrorCode, ServerWsEvents } from 'ecto-shared';
 import { formatCategory } from '../../utils/format.js';
 import { requirePermission } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -43,7 +43,7 @@ export const categoriesRouter = router({
 
       const [row] = await d.select().from(categories).where(eq(categories.id, id)).limit(1);
       const formatted = formatCategory(row!);
-      eventDispatcher.dispatchToServer(ctx.serverId, 'category.create', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CATEGORY_CREATE, formatted);
       return formatted;
     }),
 
@@ -114,9 +114,9 @@ export const categoriesRouter = router({
         return formatCategory(updated!);
       });
 
-      eventDispatcher.dispatchToServer(ctx.serverId, 'category.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CATEGORY_UPDATE, formatted);
       if (input.permission_overrides) {
-        eventDispatcher.dispatchToServer(ctx.serverId, 'permissions.update', { type: 'category', id: input.category_id });
+        eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.PERMISSIONS_UPDATE, { type: 'category', id: input.category_id });
       }
       return formatted;
     }),
@@ -164,7 +164,7 @@ export const categoriesRouter = router({
         details: { name: cat.name },
       });
 
-      eventDispatcher.dispatchToServer(ctx.serverId, 'category.delete', { id: input.category_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CATEGORY_DELETE, { id: input.category_id });
       return { success: true };
     }),
 
@@ -197,7 +197,7 @@ export const categoriesRouter = router({
         .select()
         .from(categories)
         .where(eq(categories.serverId, ctx.serverId));
-      eventDispatcher.dispatchToServer(ctx.serverId, 'category.reorder', allCategories.map(formatCategory));
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CATEGORY_REORDER, allCategories.map(formatCategory));
 
       return { success: true };
     }),

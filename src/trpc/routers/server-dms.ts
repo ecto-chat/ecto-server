@@ -11,7 +11,7 @@ import {
   activityItems,
 } from '../../db/schema/index.js';
 import { eq, and, or, ne, lt, gt, desc, inArray, sql, count as countFn } from 'drizzle-orm';
-import { generateUUIDv7, MessageType } from 'ecto-shared';
+import { generateUUIDv7, MessageType, ServerWsEvents } from 'ecto-shared';
 import type { ServerDmConversation, ServerDmMessage } from 'ecto-shared';
 import {
   formatMessageAuthor,
@@ -363,11 +363,11 @@ export const serverDmsRouter = router({
       const formatted = formatServerDmMessage(row!, author, msgAttachments, []);
 
       // Dispatch to both participants
-      eventDispatcher.dispatchToUser(ctx.user.id, 'server_dm.message', {
+      eventDispatcher.dispatchToUser(ctx.user.id, ServerWsEvents.SERVER_DM_MESSAGE, {
         ...formatted,
         _conversation_peer_id: input.recipient_id,
       });
-      eventDispatcher.dispatchToUser(input.recipient_id, 'server_dm.message', {
+      eventDispatcher.dispatchToUser(input.recipient_id, ServerWsEvents.SERVER_DM_MESSAGE, {
         ...formatted,
         _conversation_peer_id: ctx.user.id,
       });
@@ -383,7 +383,7 @@ export const serverDmsRouter = router({
         contentPreview: input.content.slice(0, 100),
       });
 
-      eventDispatcher.dispatchToUser(input.recipient_id, 'activity.create', {
+      eventDispatcher.dispatchToUser(input.recipient_id, ServerWsEvents.ACTIVITY_CREATE, {
         id: activityId,
         type: 'server_dm',
         actor: author,
@@ -410,7 +410,7 @@ export const serverDmsRouter = router({
             conversationId: convo!.id,
             contentPreview: input.content.slice(0, 100),
           });
-          eventDispatcher.dispatchToUser(replyTarget.authorId, 'activity.create', {
+          eventDispatcher.dispatchToUser(replyTarget.authorId, ServerWsEvents.ACTIVITY_CREATE, {
             id: replyActId,
             type: 'reply',
             actor: author,
@@ -465,8 +465,8 @@ export const serverDmsRouter = router({
 
       // Dispatch to both participants
       const peerId = convo.userA === ctx.user.id ? convo.userB : convo.userA;
-      eventDispatcher.dispatchToUser(ctx.user.id, 'server_dm.update', formatted);
-      eventDispatcher.dispatchToUser(peerId, 'server_dm.update', formatted);
+      eventDispatcher.dispatchToUser(ctx.user.id, ServerWsEvents.SERVER_DM_UPDATE, formatted);
+      eventDispatcher.dispatchToUser(peerId, ServerWsEvents.SERVER_DM_UPDATE, formatted);
 
       return formatted;
     }),
@@ -492,8 +492,8 @@ export const serverDmsRouter = router({
 
       const payload = { id: input.message_id, conversation_id: msg.channelId };
       const peerId = convo.userA === ctx.user.id ? convo.userB : convo.userA;
-      eventDispatcher.dispatchToUser(ctx.user.id, 'server_dm.delete', payload);
-      eventDispatcher.dispatchToUser(peerId, 'server_dm.delete', payload);
+      eventDispatcher.dispatchToUser(ctx.user.id, ServerWsEvents.SERVER_DM_DELETE, payload);
+      eventDispatcher.dispatchToUser(peerId, ServerWsEvents.SERVER_DM_DELETE, payload);
 
       return { success: true };
     }),
@@ -565,8 +565,8 @@ export const serverDmsRouter = router({
         count: reactionCount,
       };
       const peerId = convo.userA === ctx.user.id ? convo.userB : convo.userA;
-      eventDispatcher.dispatchToUser(ctx.user.id, 'server_dm.reaction_update', payload);
-      eventDispatcher.dispatchToUser(peerId, 'server_dm.reaction_update', payload);
+      eventDispatcher.dispatchToUser(ctx.user.id, ServerWsEvents.SERVER_DM_REACTION, payload);
+      eventDispatcher.dispatchToUser(peerId, ServerWsEvents.SERVER_DM_REACTION, payload);
 
       return groups;
     }),

@@ -1,6 +1,6 @@
 import type http from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { generateUUIDv7, HEARTBEAT_INTERVAL, PROTOCOL_VERSION, WsCloseCode } from 'ecto-shared';
+import { generateUUIDv7, HEARTBEAT_INTERVAL, PROTOCOL_VERSION, WsCloseCode, ServerWsEvents } from 'ecto-shared';
 import type { WsMessage } from 'ecto-shared';
 import { eventDispatcher } from './event-dispatcher.js';
 import { verifyToken } from '../middleware/auth.js';
@@ -250,7 +250,7 @@ export function setupMainWebSocket(): WebSocketServer {
           ws.send(JSON.stringify(ready));
 
           // Broadcast online status to all other users on this server
-          eventDispatcher.dispatchToServer(serverId, 'presence.update', {
+          eventDispatcher.dispatchToServer(serverId, ServerWsEvents.PRESENCE_UPDATE, {
             user_id: user.id,
             status: 'online',
             custom_text: null,
@@ -331,7 +331,7 @@ export function setupMainWebSocket(): WebSocketServer {
           if (typingResult.success) {
             const typingData = typingResult.data;
             if (rateLimiter.check(`typing:${session.userId}:${typingData.channel_id}`, 1, 3000)) {
-              eventDispatcher.dispatchToChannel(typingData.channel_id, 'typing.start', {
+              eventDispatcher.dispatchToChannel(typingData.channel_id, ServerWsEvents.TYPING_START, {
                 channel_id: typingData.channel_id,
                 user_id: session.userId,
                 timestamp: new Date().toISOString(),
@@ -344,7 +344,7 @@ export function setupMainWebSocket(): WebSocketServer {
         case 'typing.stop': {
           const stopResult = typingSchema.safeParse(msg.data);
           if (stopResult.success) {
-            eventDispatcher.dispatchToChannel(stopResult.data.channel_id, 'typing.stop', {
+            eventDispatcher.dispatchToChannel(stopResult.data.channel_id, ServerWsEvents.TYPING_STOP, {
               channel_id: stopResult.data.channel_id,
               user_id: session.userId,
             });
@@ -362,7 +362,7 @@ export function setupMainWebSocket(): WebSocketServer {
               presData.custom_text ?? null,
             );
             if (session.serverId) {
-              eventDispatcher.dispatchToServer(session.serverId, 'presence.update', {
+              eventDispatcher.dispatchToServer(session.serverId, ServerWsEvents.PRESENCE_UPDATE, {
                 user_id: session.userId,
                 status: presData.status,
                 custom_text: presData.custom_text ?? null,
@@ -397,7 +397,7 @@ export function setupMainWebSocket(): WebSocketServer {
                   .limit(1);
                 if (convo) {
                   const peerId = convo.userA === session.userId ? convo.userB : convo.userA;
-                  eventDispatcher.dispatchToUser(peerId, 'server_dm.typing', {
+                  eventDispatcher.dispatchToUser(peerId, ServerWsEvents.SERVER_DM_TYPING, {
                     conversation_id,
                     user_id: session.userId,
                     timestamp: new Date().toISOString(),
@@ -447,7 +447,7 @@ export function setupMainWebSocket(): WebSocketServer {
             if (eventDispatcher.getSessionsByUser(closingUserId).length === 0) {
               presenceManager.remove(closingUserId);
               if (closingServerId) {
-                eventDispatcher.dispatchToServer(closingServerId, 'presence.update', {
+                eventDispatcher.dispatchToServer(closingServerId, ServerWsEvents.PRESENCE_UPDATE, {
                   user_id: closingUserId,
                   status: 'offline',
                   custom_text: null,

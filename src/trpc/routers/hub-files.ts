@@ -16,7 +16,7 @@ import {
   categoryPermissionOverrides,
 } from '../../db/schema/index.js';
 import { eq, and, desc, lt, sql, inArray, isNull } from 'drizzle-orm';
-import { Permissions, generateUUIDv7, computePermissions, hasPermission, permissionBitfieldSchema } from 'ecto-shared';
+import { Permissions, generateUUIDv7, computePermissions, hasPermission, permissionBitfieldSchema, ServerWsEvents } from 'ecto-shared';
 import {
   formatSharedFolder,
   formatSharedFile,
@@ -152,7 +152,7 @@ export const hubFilesRouter = router({
       }).returning();
 
       const result = formatSharedFolder(folder!, 0, 0);
-      eventDispatcher.dispatchToAll('shared_folder.create', result);
+      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FOLDER_CREATE, result);
       return result;
     }),
 
@@ -192,7 +192,7 @@ export const hubFilesRouter = router({
         details: { name: input.name, previous_name: folder.name },
       });
 
-      eventDispatcher.dispatchToAll('shared_folder.update', {
+      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FOLDER_UPDATE, {
         id: input.folder_id,
         name: input.name,
         parent_id: folder.parentId,
@@ -272,7 +272,7 @@ export const hubFilesRouter = router({
         details: { name: folder.name },
       });
 
-      eventDispatcher.dispatchToAll('shared_folder.delete', { id: input.folder_id });
+      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FOLDER_DELETE, { id: input.folder_id });
       return { success: true };
     }),
 
@@ -375,7 +375,7 @@ export const hubFilesRouter = router({
         details: { filename: file.filename },
       });
 
-      eventDispatcher.dispatchToAll('shared_file.delete', { id: input.file_id, folder_id: file.folderId });
+      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FILE_DELETE, { id: input.file_id, folder_id: file.folderId });
       return { success: true };
     }),
 
@@ -508,7 +508,7 @@ export const hubFilesRouter = router({
           .update(messages)
           .set({ deleted: true })
           .where(eq(messages.id, message.id));
-        eventDispatcher.dispatchToChannel(message.channelId, 'message.delete', {
+        eventDispatcher.dispatchToChannel(message.channelId, ServerWsEvents.MESSAGE_DELETE, {
           id: message.id,
           channel_id: message.channelId,
         });
@@ -518,14 +518,14 @@ export const hubFilesRouter = router({
           .select()
           .from(attachments)
           .where(eq(attachments.messageId, message.id));
-        eventDispatcher.dispatchToChannel(message.channelId, 'message.update', {
+        eventDispatcher.dispatchToChannel(message.channelId, ServerWsEvents.MESSAGE_UPDATE, {
           id: message.id,
           channel_id: message.channelId,
           attachments: updatedAttachments.map(formatAttachment),
         });
       }
 
-      eventDispatcher.dispatchToAll('channel_file.delete', { id: input.attachment_id });
+      eventDispatcher.dispatchToAll(ServerWsEvents.CHANNEL_FILE_DELETE, { id: input.attachment_id });
 
       await insertAuditLog(d, {
         serverId: ctx.serverId,
@@ -751,7 +751,7 @@ export const hubFilesRouter = router({
         details: { overrides_count: toInsert.length },
       });
 
-      eventDispatcher.dispatchToAll('shared_item.permissions_update', {
+      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_ITEM_PERMISSIONS_UPDATE, {
         item_type: input.item_type,
         item_id: input.item_id,
       });

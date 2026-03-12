@@ -1,3 +1,4 @@
+import { ServerWsEvents } from 'ecto-shared';
 import { voiceStateManager } from '../services/voice-state.js';
 import { voiceManager } from '../voice/index.js';
 import { eventDispatcher } from '../ws/event-dispatcher.js';
@@ -15,7 +16,7 @@ export function cleanupVoiceState(userId: string, serverId: string, sessionId?: 
 
   voiceStateManager.leave(userId);
   voiceManager.leaveChannel(userId, voiceState.channelId).catch(() => {});
-  eventDispatcher.dispatchToServer(serverId, 'voice.state_update', {
+  eventDispatcher.dispatchToServer(serverId, ServerWsEvents.VOICE_STATE_UPDATE, {
     ...formatVoiceState(voiceState),
     _removed: true,
   });

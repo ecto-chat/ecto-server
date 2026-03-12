@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { verifyToken } from '../middleware/auth.js';
 import { db } from '../db/index.js';
 import { servers, channels, pageContents } from '../db/schema/index.js';
-import { generateUUIDv7 } from 'ecto-shared';
+import { generateUUIDv7, ServerWsEvents } from 'ecto-shared';
 import { eq, and } from 'drizzle-orm';
 import { resolveServerId } from '../trpc/context.js';
 import { requirePermission } from '../utils/permission-context.js';
@@ -151,7 +151,7 @@ export async function handlePageBannerUpload(req: IncomingMessage, res: ServerRe
       .limit(1);
 
     if (updated) {
-      eventDispatcher.dispatchToChannel(channelId, 'page.update', {
+      eventDispatcher.dispatchToChannel(channelId, ServerWsEvents.PAGE_UPDATE, {
         channel_id: updated.channelId,
         content: updated.content,
         banner_url: updated.bannerUrl ?? null,

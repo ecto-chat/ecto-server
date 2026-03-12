@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { verifyToken } from '../middleware/auth.js';
 import { db } from '../db/index.js';
 import { sharedFiles, sharedFolders, serverConfig } from '../db/schema/index.js';
-import { generateUUIDv7, Permissions, hasPermission } from 'ecto-shared';
+import { generateUUIDv7, Permissions, hasPermission, ServerWsEvents } from 'ecto-shared';
 import { eq, and, sql } from 'drizzle-orm';
 import { requirePermission } from '../utils/permission-context.js';
 import { resolveSharedItemAccess } from '../utils/shared-permissions.js';
@@ -130,7 +130,7 @@ export async function handleSharedFileUpload(req: IncomingMessage, res: ServerRe
     const uploaderName = profiles.get(user.id)?.username ?? 'Unknown';
 
     const result = formatSharedFile(row!, uploaderName);
-    eventDispatcher.dispatchToAll('shared_file.create', result);
+    eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FILE_CREATE, result);
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(result));

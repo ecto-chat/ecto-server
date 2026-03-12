@@ -22,6 +22,7 @@ import { db } from '../db/index.js';
 import { serverConfig, servers } from '../db/schema/index.js';
 import { formatServer } from '../utils/format.js';
 import { readBody } from '../utils/http.js';
+import { ServerWsEvents } from 'ecto-shared';
 import { eventDispatcher } from '../ws/event-dispatcher.js';
 
 export async function createServer(_config: Config) {
@@ -232,7 +233,7 @@ export async function createServer(_config: Config) {
         if (serverRow) {
           await d.update(serverConfig).set({ discoveryApproved: approved, updatedAt: new Date() }).where(eq(serverConfig.serverId, serverRow.id));
           const [cfg] = await d.select().from(serverConfig).where(eq(serverConfig.serverId, serverRow.id)).limit(1);
-          eventDispatcher.dispatchToServer(serverRow.id, 'server.update', formatServer(serverRow, cfg));
+          eventDispatcher.dispatchToServer(serverRow.id, ServerWsEvents.SERVER_UPDATE, formatServer(serverRow, cfg));
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });

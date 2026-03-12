@@ -17,6 +17,7 @@ import {
   Permissions,
   updateServerSchema,
   MessageType,
+  ServerWsEvents,
 } from 'ecto-shared';
 import { formatServer, formatMember, formatChannel, formatMessage, formatMessageAuthor } from '../../utils/format.js';
 import { requirePermission, requireMember } from '../../utils/permission-context.js';
@@ -115,7 +116,7 @@ export const serverRouter = router({
         .where(eq(servers.id, ctx.serverId))
         .limit(1);
       const formatted = formatServer(updated!);
-      eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SERVER_UPDATE, formatted);
       syncServerMetadataToCentral(formatted);
       return formatted;
     }),
@@ -272,7 +273,7 @@ export const serverRouter = router({
 
       // Broadcast after transaction commits
       if (result.isNew) {
-        eventDispatcher.dispatchToServer(ctx.serverId, 'member.join', result.member);
+        eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.MEMBER_JOIN, result.member);
 
         // Insert MEMBER_JOIN system message in the default channel
         const [[srvCfg], [srv]] = await Promise.all([
@@ -299,7 +300,7 @@ export const serverRouter = router({
               .limit(1);
             const author = formatMessageAuthor(profile, userId, memberRow?.nickname ?? null);
             const sysFormatted = formatMessage(sysRow, author, [], []);
-            eventDispatcher.dispatchToChannel(srv.defaultChannelId, 'message.create', sysFormatted);
+            eventDispatcher.dispatchToChannel(srv.defaultChannelId, ServerWsEvents.MESSAGE_CREATE, sysFormatted);
           }
         }
       }
@@ -342,7 +343,7 @@ export const serverRouter = router({
       targetId: ctx.user.id,
     });
 
-    eventDispatcher.dispatchToServer(ctx.serverId, 'member.leave', { user_id: ctx.user.id });
+    eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.MEMBER_LEAVE, { user_id: ctx.user.id });
     return { success: true };
   }),
 
@@ -362,7 +363,7 @@ export const serverRouter = router({
       }
 
       // Broadcast server deletion so clients disconnect
-      eventDispatcher.dispatchToServer(ctx.serverId, 'server.delete', { id: ctx.serverId });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SERVER_DELETE, { id: ctx.serverId });
 
       await insertAuditLog(d, {
         serverId: ctx.serverId,
@@ -416,7 +417,7 @@ export const serverRouter = router({
 
       const [updated] = await d.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
       const formatted = formatServer(updated!);
-      eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SERVER_UPDATE, formatted);
       return { success: true };
     }),
 
@@ -449,7 +450,7 @@ export const serverRouter = router({
       // Broadcast full server object so clients get consistent payloads
       const [updated] = await ctx.db.select().from(servers).where(eq(servers.id, ctx.serverId)).limit(1);
       const formatted = formatServer(updated!);
-      eventDispatcher.dispatchToServer(ctx.serverId, 'server.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SERVER_UPDATE, formatted);
       syncServerMetadataToCentral(formatted);
       return { icon_url: input.icon_url };
     }),

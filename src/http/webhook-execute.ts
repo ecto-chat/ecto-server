@@ -2,7 +2,7 @@ import type http from 'node:http';
 import { db } from '../db/index.js';
 import { webhooks, messages, channels } from '../db/schema/index.js';
 import { eq, and } from 'drizzle-orm';
-import { generateUUIDv7, parseMentions, MessageType } from 'ecto-shared';
+import { generateUUIDv7, parseMentions, MessageType, ServerWsEvents } from 'ecto-shared';
 import { formatMessage, formatMessageAuthor } from '../utils/format.js';
 import { readBody } from '../utils/http.js';
 import { eventDispatcher } from '../ws/event-dispatcher.js';
@@ -104,7 +104,7 @@ export async function handleWebhookExecute(
   const [row] = await d.select().from(messages).where(eq(messages.id, id)).limit(1);
   const formatted = formatMessage(row!, author, [], []);
 
-  eventDispatcher.dispatchToChannel(webhook.channelId, 'message.create', formatted);
+  eventDispatcher.dispatchToChannel(webhook.channelId, ServerWsEvents.MESSAGE_CREATE, formatted);
 
   jsonResponse(res, 200, formatted);
 }

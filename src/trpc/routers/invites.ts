@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { invites } from '../../db/schema/index.js';
 import { eq, and } from 'drizzle-orm';
-import { generateUUIDv7, Permissions } from 'ecto-shared';
+import { generateUUIDv7, Permissions, ServerWsEvents } from 'ecto-shared';
 import { requirePermission, requireMember } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
@@ -51,7 +51,7 @@ export const invitesRouter = router({
       const profile = profiles.get(ctx.user.id);
 
       const invite = formatInvite(row!, profile?.username ?? 'Unknown');
-      eventDispatcher.dispatchToServer(ctx.serverId, 'invite.create', invite);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.INVITE_CREATE, invite);
 
       if (config.SERVER_ADDRESS) {
         registerInviteWithCentral(code, ctx.serverId, config.SERVER_ADDRESS, expiresAt);
@@ -107,7 +107,7 @@ export const invitesRouter = router({
         targetId: input.invite_id,
       });
 
-      eventDispatcher.dispatchToServer(ctx.serverId, 'invite.delete', { id: input.invite_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.INVITE_DELETE, { id: input.invite_id });
 
       unregisterInviteFromCentral(invite.code, ctx.serverId);
 

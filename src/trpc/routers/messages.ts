@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { messages, attachments, reactions, channels, members, roles, memberRoles, readStates, serverConfig, activityItems } from '../../db/schema/index.js';
 import { eq, and, lt, gt, desc, asc, inArray, sql } from 'drizzle-orm';
-import { generateUUIDv7, Permissions, parseMentions, MessageType, computePermissions, hasPermission } from 'ecto-shared';
+import { generateUUIDv7, Permissions, parseMentions, MessageType, computePermissions, hasPermission, EctoErrorCode, ServerWsEvents } from 'ecto-shared';
 import { formatMessage, formatAttachment, formatMessageAuthor } from '../../utils/format.js';
 import { requirePermission, requireMember, buildPermissionContext } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -92,7 +92,7 @@ export const messagesRouter = router({
             const elapsed = (Date.now() - lastMsg.createdAt.getTime()) / 1000;
             if (elapsed < ch.slowmodeSeconds) {
               const retryAfter = Math.ceil(ch.slowmodeSeconds - elapsed);
-              throw ectoError('TOO_MANY_REQUESTS', 3004, `Slowmode active. Try again in ${retryAfter}s`);
+              throw ectoError('TOO_MANY_REQUESTS', EctoErrorCode.SLOWMODE_ACTIVE, `Slowmode active. Try again in ${retryAfter}s`);
             }
           }
         }
@@ -155,7 +155,7 @@ export const messagesRouter = router({
           notifiedUsers.add(mentionedUserId);
           // Send real-time notification (skip self-mentions)
           if (mentionedUserId !== ctx.user.id) {
-            eventDispatcher.dispatchToUser(mentionedUserId, 'mention.create', {
+            eventDispatcher.dispatchToUser(mentionedUserId, ServerWsEvents.MENTION_CREATE, {
               channel_id: input.channel_id,
               message_id: id,
               author_id: ctx.user.id,
@@ -194,7 +194,7 @@ export const messagesRouter = router({
               target: [readStates.userId, readStates.channelId],
               set: { mentionCount: sql`${readStates.mentionCount} + 1` },
             });
-          eventDispatcher.dispatchToUser(m.userId, 'mention.create', {
+          eventDispatcher.dispatchToUser(m.userId, ServerWsEvents.MENTION_CREATE, {
             channel_id: input.channel_id,
             message_id: id,
             author_id: ctx.user.id,
@@ -240,7 +240,7 @@ export const messagesRouter = router({
                 target: [readStates.userId, readStates.channelId],
                 set: { mentionCount: sql`${readStates.mentionCount} + 1` },
               });
-            eventDispatcher.dispatchToUser(m.userId, 'mention.create', {
+            eventDispatcher.dispatchToUser(m.userId, ServerWsEvents.MENTION_CREATE, {
               channel_id: input.channel_id,
               message_id: id,
               author_id: ctx.user.id,
@@ -299,7 +299,7 @@ export const messagesRouter = router({
       // Dispatch pending activity items
       if (pendingActivities.length > 0) {
         for (const pa of pendingActivities) {
-          eventDispatcher.dispatchToUser(pa.recipientId, 'activity.create', {
+          eventDispatcher.dispatchToUser(pa.recipientId, ServerWsEvents.ACTIVITY_CREATE, {
             id: pa.id,
             type: pa.type,
             actor: author,
@@ -318,7 +318,7 @@ export const messagesRouter = router({
 
       const formatted = formatMessage(row!, author, msgAttachments, []);
       const payload = input.nonce ? { ...formatted, nonce: input.nonce } : formatted;
-      eventDispatcher.dispatchToChannel(input.channel_id, 'message.create', payload);
+      eventDispatcher.dispatchToChannel(input.channel_id, ServerWsEvents.MESSAGE_CREATE, payload);
       return payload;
     }),
 
@@ -345,7 +345,7 @@ export const messagesRouter = router({
       const reactionGroups = groupReactions(reactionRows.map((r) => ({ emoji: r.emoji, userId: r.userId })), ctx.user.id);
 
       const formatted = formatMessage(updated!, author, msgAttachments, reactionGroups);
-      eventDispatcher.dispatchToChannel(msg.channelId, 'message.update', formatted);
+      eventDispatcher.dispatchToChannel(msg.channelId, ServerWsEvents.MESSAGE_UPDATE, formatted);
       return formatted;
     }),
 
@@ -368,7 +368,7 @@ export const messagesRouter = router({
       }
 
       await d.update(messages).set({ deleted: true }).where(eq(messages.id, input.message_id));
-      eventDispatcher.dispatchToChannel(msg.channelId, 'message.delete', { id: input.message_id, channel_id: msg.channelId });
+      eventDispatcher.dispatchToChannel(msg.channelId, ServerWsEvents.MESSAGE_DELETE, { id: input.message_id, channel_id: msg.channelId });
       return { success: true };
     }),
 
@@ -411,7 +411,7 @@ export const messagesRouter = router({
               .limit(1);
             const pinnerAuthor = formatMessageAuthor(pinnerProfile, ctx.user.id, pinnerMember?.nickname ?? null);
             const sysFormatted = formatMessage(sysRow, pinnerAuthor, [], []);
-            eventDispatcher.dispatchToChannel(msg.channelId, 'message.create', sysFormatted);
+            eventDispatcher.dispatchToChannel(msg.channelId, ServerWsEvents.MESSAGE_CREATE, sysFormatted);
           }
         }
       }
@@ -439,7 +439,7 @@ export const messagesRouter = router({
       const reactionGroups = groupReactions(reactionRows.map((r) => ({ emoji: r.emoji, userId: r.userId })), ctx.user.id);
 
       const pinnedFormatted = formatMessage(updated!, author, msgAttachments, reactionGroups);
-      eventDispatcher.dispatchToChannel(msg.channelId, 'message.update', pinnedFormatted);
+      eventDispatcher.dispatchToChannel(msg.channelId, ServerWsEvents.MESSAGE_UPDATE, pinnedFormatted);
       return pinnedFormatted;
     }),
 
@@ -483,7 +483,7 @@ export const messagesRouter = router({
       const reactionRows = await d.select().from(reactions).where(eq(reactions.messageId, input.message_id));
       const groups = groupReactions(reactionRows.map((r) => ({ emoji: r.emoji, userId: r.userId })), ctx.user.id);
       const reactionCount = groups.find((g) => g.emoji === input.emoji)?.count ?? 0;
-      eventDispatcher.dispatchToChannel(msg.channelId, 'message.reaction_update', {
+      eventDispatcher.dispatchToChannel(msg.channelId, ServerWsEvents.MESSAGE_REACTION_UPDATE, {
         channel_id: msg.channelId,
         message_id: input.message_id,
         emoji: input.emoji,
@@ -514,7 +514,7 @@ export const messagesRouter = router({
           emoji: input.emoji,
         });
 
-        eventDispatcher.dispatchToUser(msg.authorId, 'activity.create', {
+        eventDispatcher.dispatchToUser(msg.authorId, ServerWsEvents.ACTIVITY_CREATE, {
           id: activityId,
           type: 'reaction',
           actor,

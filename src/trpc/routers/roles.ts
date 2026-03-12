@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { roles, memberRoles } from '../../db/schema/index.js';
 import { eq, and, desc, max } from 'drizzle-orm';
-import { generateUUIDv7, Permissions, permissionBitfieldSchema } from 'ecto-shared';
+import { generateUUIDv7, Permissions, permissionBitfieldSchema, ServerWsEvents } from 'ecto-shared';
 import { formatRole } from '../../utils/format.js';
 import { requirePermission, requireMember } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -63,7 +63,7 @@ export const rolesRouter = router({
 
       const [row] = await d.select().from(roles).where(eq(roles.id, id)).limit(1);
       const formatted = formatRole(row!);
-      eventDispatcher.dispatchToServer(ctx.serverId, 'role.create', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.ROLE_CREATE, formatted);
       return formatted;
     }),
 
@@ -107,7 +107,7 @@ export const rolesRouter = router({
 
       const [updated] = await ctx.db.select().from(roles).where(eq(roles.id, input.role_id)).limit(1);
       const formatted = formatRole(updated!);
-      eventDispatcher.dispatchToServer(ctx.serverId, 'role.update', formatted);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.ROLE_UPDATE, formatted);
       return formatted;
     }),
 
@@ -136,7 +136,7 @@ export const rolesRouter = router({
         details: { name: role.name },
       });
 
-      eventDispatcher.dispatchToServer(ctx.serverId, 'role.delete', { id: input.role_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.ROLE_DELETE, { id: input.role_id });
       return { success: true };
     }),
 
@@ -170,7 +170,7 @@ export const rolesRouter = router({
         .from(roles)
         .where(eq(roles.serverId, ctx.serverId))
         .orderBy(desc(roles.position));
-      eventDispatcher.dispatchToServer(ctx.serverId, 'role.reorder', allRoles.map(formatRole));
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.ROLE_REORDER, allRoles.map(formatRole));
 
       return { success: true };
     }),

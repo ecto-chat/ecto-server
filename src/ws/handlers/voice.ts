@@ -1,6 +1,6 @@
 import type { WsSession } from '../event-dispatcher.js';
 import type { WsMessage } from 'ecto-shared';
-import { MAX_VOICE_PARTICIPANTS, Permissions } from 'ecto-shared';
+import { MAX_VOICE_PARTICIPANTS, Permissions, ServerWsEvents } from 'ecto-shared';
 import { voiceStateManager } from '../../services/voice-state.js';
 import { voiceManager } from '../../voice/index.js';
 import { eventDispatcher } from '../event-dispatcher.js';
@@ -72,7 +72,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
         // Force: leave current channel
         voiceStateManager.leave(session.userId);
         await voiceManager.leaveChannel(session.userId, existing.channelId);
-        eventDispatcher.dispatchToServer(sid, 'voice.state_update', {
+        eventDispatcher.dispatchToServer(sid, ServerWsEvents.VOICE_STATE_UPDATE, {
           ...formatVoiceState(existing),
           _removed: true,
         });
@@ -130,7 +130,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       }
 
       // Broadcast state update
-      eventDispatcher.dispatchToServer(sid, 'voice.state_update', formatVoiceState(state));
+      eventDispatcher.dispatchToServer(sid, ServerWsEvents.VOICE_STATE_UPDATE, formatVoiceState(state));
 
       // Send existing channel participants to the joining user so they know who's already here
       const channelStates = voiceStateManager.getByChannel(channelId);
@@ -148,7 +148,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
       const state = voiceStateManager.leave(session.userId);
       if (state && session.serverId) {
         await voiceManager.leaveChannel(session.userId, state.channelId);
-        eventDispatcher.dispatchToServer(session.serverId, 'voice.state_update', {
+        eventDispatcher.dispatchToServer(session.serverId, ServerWsEvents.VOICE_STATE_UPDATE, {
           ...formatVoiceState(state),
           _removed: true,
         });
@@ -190,7 +190,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
             );
             if (consumer) {
               console.log(`[voice:debug] consumer created for ${session.userId}: kind=${consumer.kind}, producerId=${prod.producerId}, consumerId=${consumer.consumerId}`);
-              eventDispatcher.dispatchToUser(session.userId, 'voice.new_consumer', {
+              eventDispatcher.dispatchToUser(session.userId, ServerWsEvents.VOICE_NEW_CONSUMER, {
                 consumer_id: consumer.consumerId,
                 producer_id: prod.producerId,
                 user_id: prod.userId,
@@ -264,7 +264,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
                 );
                 if (consumer) {
                   console.log(`[voice:debug] consumer created for ${other.userId}: kind=${consumer.kind}, consumerId=${consumer.consumerId}`);
-                  eventDispatcher.dispatchToUser(other.userId, 'voice.new_consumer', {
+                  eventDispatcher.dispatchToUser(other.userId, ServerWsEvents.VOICE_NEW_CONSUMER, {
                     consumer_id: consumer.consumerId,
                     producer_id: producer.id,
                     user_id: session.userId,
@@ -294,7 +294,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
         voiceManager.closeProducer(stopResult.data.producer_id);
         const state = voiceStateManager.getByUser(session.userId);
         if (state && session.serverId) {
-          eventDispatcher.dispatchToServer(session.serverId, 'voice.producer_closed', {
+          eventDispatcher.dispatchToServer(session.serverId, ServerWsEvents.VOICE_PRODUCER_CLOSED, {
             producer_id: stopResult.data.producer_id,
             user_id: session.userId,
             channel_id: state.channelId,
@@ -345,7 +345,7 @@ export async function handleVoiceMessage(session: WsSession, msg: WsMessage) {
 
       const state = voiceStateManager.getByUser(session.userId);
       if (state && session.serverId) {
-        eventDispatcher.dispatchToServer(session.serverId, 'voice.state_update', formatVoiceState(state));
+        eventDispatcher.dispatchToServer(session.serverId, ServerWsEvents.VOICE_STATE_UPDATE, formatVoiceState(state));
       }
       break;
     }
