@@ -1,6 +1,6 @@
 import type { Db } from '../db/index.js';
 import type { PermissionContext } from 'ecto-shared';
-import { computePermissions, hasPermission } from 'ecto-shared';
+import { computePermissions, hasPermission, Permissions } from 'ecto-shared';
 import {
   members,
   roles,
@@ -266,6 +266,131 @@ export async function buildBatchPermissionContext(
   }
 
   return result;
+}
+
+/**
+ * Returns the set of user_ids who have READ_MESSAGES on a given channel.
+ * Evaluates permissions for ALL server members against one channel.
+ */
+export async function getChannelVisibleUserIds(
+  d: Db,
+  serverId: string,
+  channelId: string,
+): Promise<Set<string>> {
+  // 1. Get server owner
+  const [server] = await d
+    .select({ adminUserId: servers.adminUserId })
+    .from(servers)
+    .where(eq(servers.id, serverId))
+    .limit(1);
+
+  // 2. Get all roles, all members with role assignments, channel info, and channel overrides in parallel
+  const [allRoles, allMembers, allMemberRoleRows, [channel], channelOverrides] = await Promise.all([
+    d.select().from(roles).where(eq(roles.serverId, serverId)),
+    d.select({ id: members.id, userId: members.userId }).from(members).where(eq(members.serverId, serverId)),
+    d.select({ memberId: memberRoles.memberId, roleId: memberRoles.roleId }).from(memberRoles)
+      .innerJoin(members, eq(members.id, memberRoles.memberId))
+      .where(eq(members.serverId, serverId)),
+    d.select({ categoryId: channels.categoryId }).from(channels).where(eq(channels.id, channelId)).limit(1),
+    d.select().from(channelPermissionOverrides).where(eq(channelPermissionOverrides.channelId, channelId)),
+  ]);
+
+  // 3. Fetch category overrides if channel belongs to a category
+  type CatOverrideRow = typeof categoryPermissionOverrides.$inferSelect;
+  let catOverrides: CatOverrideRow[] = [];
+  if (channel?.categoryId) {
+    catOverrides = await d
+      .select()
+      .from(categoryPermissionOverrides)
+      .where(eq(categoryPermissionOverrides.categoryId, channel.categoryId));
+  }
+
+  const everyoneRole = allRoles.find((r) => r.isDefault);
+  const everyonePermissions = everyoneRole?.permissions ?? 0;
+
+  // Build memberId → roleIds map
+  const rolesByMember = new Map<string, Set<string>>();
+  for (const mr of allMemberRoleRows) {
+    const set = rolesByMember.get(mr.memberId) ?? new Set();
+    set.add(mr.roleId);
+    rolesByMember.set(mr.memberId, set);
+  }
+
+  // Role id → permissions lookup
+  const roleMap = new Map(allRoles.map((r) => [r.id, r]));
+
+  // Pre-compute category overrides by target
+  const catEveryoneOverride = everyoneRole
+    ? catOverrides.find((o) => o.targetType === 'role' && o.targetId === everyoneRole.id)
+    : undefined;
+
+  // Channel overrides by target
+  const chEveryoneOverride = everyoneRole
+    ? channelOverrides.find((o) => o.targetType === 'role' && o.targetId === everyoneRole.id)
+    : undefined;
+
+  // Member-specific channel overrides: targetId (userId) → override
+  const memberOverridesMap = new Map<string, { allow: number; deny: number }>();
+  for (const o of channelOverrides) {
+    if (o.targetType === 'member') {
+      memberOverridesMap.set(o.targetId, { allow: o.allow, deny: o.deny });
+    }
+  }
+
+  const visibleUserIds = new Set<string>();
+
+  for (const member of allMembers) {
+    // Owner always visible
+    if (server?.adminUserId === member.userId) {
+      visibleUserIds.add(member.userId);
+      continue;
+    }
+
+    const memberRoleIds = rolesByMember.get(member.id) ?? new Set();
+    const rolePermissions = allRoles
+      .filter((r) => memberRoleIds.has(r.id) && !r.isDefault)
+      .map((r) => r.permissions);
+
+    const ctx: PermissionContext = {
+      isOwner: false,
+      everyonePermissions,
+      rolePermissions,
+    };
+
+    // Category overrides
+    if (catEveryoneOverride) {
+      ctx.categoryEveryoneOverride = { allow: catEveryoneOverride.allow, deny: catEveryoneOverride.deny };
+    }
+    const catRoleOvr = catOverrides
+      .filter((o) => o.targetType === 'role' && memberRoleIds.has(o.targetId))
+      .map((o) => ({ allow: o.allow, deny: o.deny }));
+    if (catRoleOvr.length > 0) {
+      ctx.categoryRoleOverrides = catRoleOvr;
+    }
+
+    // Channel overrides
+    if (chEveryoneOverride) {
+      ctx.everyoneOverride = { allow: chEveryoneOverride.allow, deny: chEveryoneOverride.deny };
+    }
+    const chRoleOvr = channelOverrides
+      .filter((o) => o.targetType === 'role' && memberRoleIds.has(o.targetId))
+      .map((o) => ({ allow: o.allow, deny: o.deny }));
+    if (chRoleOvr.length > 0) {
+      ctx.roleOverrides = chRoleOvr;
+    }
+
+    const memberOverride = memberOverridesMap.get(member.userId);
+    if (memberOverride) {
+      ctx.memberOverride = memberOverride;
+    }
+
+    const effective = computePermissions(ctx);
+    if (hasPermission(effective, Permissions.READ_MESSAGES)) {
+      visibleUserIds.add(member.userId);
+    }
+  }
+
+  return visibleUserIds;
 }
 
 export async function requirePermission(

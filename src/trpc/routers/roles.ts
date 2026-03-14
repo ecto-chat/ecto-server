@@ -107,7 +107,12 @@ export const rolesRouter = router({
 
       const [updated] = await ctx.db.select().from(roles).where(eq(roles.id, input.role_id)).limit(1);
       const formatted = formatRole(updated!);
+      console.log('[roles.update] dispatching ROLE_UPDATE for', input.role_id, 'permissions changed:', input.permissions !== undefined);
       eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.ROLE_UPDATE, formatted);
+      if (input.permissions !== undefined) {
+        console.log('[roles.update] dispatching PERMISSIONS_UPDATE type=role id=', input.role_id);
+        eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.PERMISSIONS_UPDATE, { type: 'role', id: input.role_id });
+      }
       return formatted;
     }),
 
@@ -137,6 +142,7 @@ export const rolesRouter = router({
       });
 
       eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.ROLE_DELETE, { id: input.role_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.PERMISSIONS_UPDATE, { type: 'role', id: input.role_id });
       return { success: true };
     }),
 

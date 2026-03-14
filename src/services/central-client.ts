@@ -9,7 +9,7 @@ interface CentralVerifyResult {
 }
 
 const verifyCache = new Map<string, { result: CentralVerifyResult; expiresAt: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 60 * 1000; // 1 minute
 
 export async function centralVerifyToken(token: string): Promise<CentralVerifyResult> {
   const cached = verifyCache.get(token);

@@ -6,7 +6,7 @@ import { signServerToken } from '../../utils/jwt.js';
 import { eq, and, count, ilike, or, lt, desc, inArray, sql } from 'drizzle-orm';
 import { generateUUIDv7, Permissions, ServerWsEvents } from 'ecto-shared';
 import { formatMember } from '../../utils/format.js';
-import { requirePermission, requireMember, buildPermissionContext } from '../../utils/permission-context.js';
+import { requirePermission, requireMember, buildPermissionContext, getChannelVisibleUserIds } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
 import { ectoError } from '../../utils/errors.js';
 import { resolveUserProfiles } from '../../utils/resolve-profile.js';
@@ -115,6 +115,7 @@ export const membersRouter = router({
         after: z.string().uuid().optional(),
         role_id: z.string().uuid().optional(),
         search: z.string().max(100).optional(),
+        channel_id: z.string().uuid().optional(),
       }).optional(),
     )
     .query(async ({ ctx, input }) => {
@@ -122,10 +123,23 @@ export const membersRouter = router({
       const d = ctx.db;
       const limit = input?.limit ?? 50;
 
+      // Channel-scoped visibility filter
+      let visibleUserIds: Set<string> | undefined;
+      if (input?.channel_id) {
+        visibleUserIds = await getChannelVisibleUserIds(d, ctx.serverId, input.channel_id);
+      }
+
       // Build query conditions
       const conditions = [eq(members.serverId, ctx.serverId)];
       if (input?.after) {
         conditions.push(lt(members.id, input.after));
+      }
+      if (visibleUserIds) {
+        const userIdArray = [...visibleUserIds];
+        if (userIdArray.length === 0) {
+          return { members: [], total: 0, has_more: false };
+        }
+        conditions.push(inArray(members.userId, userIdArray));
       }
 
       let query = d.select().from(members).where(and(...conditions)).orderBy(desc(members.id)).limit(limit + 1);
@@ -174,10 +188,17 @@ export const membersRouter = router({
       }
 
       // Get total count
+      const totalConditions = [eq(members.serverId, ctx.serverId)];
+      if (visibleUserIds) {
+        const userIdArray = [...visibleUserIds];
+        if (userIdArray.length > 0) {
+          totalConditions.push(inArray(members.userId, userIdArray));
+        }
+      }
       const [totalResult] = await d
         .select({ count: count() })
         .from(members)
-        .where(eq(members.serverId, ctx.serverId));
+        .where(and(...totalConditions));
 
       const formattedMembers = memberRows.map((m) => {
         const profile = profiles.get(m.userId) ?? { username: 'Unknown', display_name: null, avatar_url: null };
