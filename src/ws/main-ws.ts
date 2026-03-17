@@ -3,6 +3,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { generateUUIDv7, HEARTBEAT_INTERVAL, PROTOCOL_VERSION, WsCloseCode, ServerWsEvents } from 'ecto-shared';
 import type { WsMessage } from 'ecto-shared';
 import { eventDispatcher } from './event-dispatcher.js';
+import { getCurrentSeq, getEventsSince } from './event-buffer.js';
 import { verifyToken } from '../middleware/auth.js';
 import { resolveServerId } from '../trpc/context.js';
 import { db } from '../db/index.js';
@@ -134,6 +135,40 @@ export function setupMainWebSocket(): WebSocketServer {
           // Set user online
           presenceManager.update(user.id, 'online', null);
 
+          // Broadcast online status early (needed for both resume and full ready)
+          eventDispatcher.dispatchToServer(serverId, ServerWsEvents.PRESENCE_UPDATE, {
+            user_id: user.id,
+            status: 'online',
+            custom_text: null,
+            last_active_at: new Date().toISOString(),
+          });
+
+          // Attempt server-level resume if client provided resume_seq
+          if (payload.resume_seq != null) {
+            const missedEvents = getEventsSince(serverId, payload.resume_seq);
+            if (missedEvents !== null) {
+              // Resume successful — send missed events + new resume_seq
+              const resumed: WsMessage = {
+                event: 'system.resumed',
+                data: {
+                  events: missedEvents.map(e => ({ event: e.event, data: e.data })),
+                  resume_seq: getCurrentSeq(serverId),
+                },
+              };
+              ws.send(JSON.stringify(resumed));
+
+              // Start heartbeat check
+              heartbeatTimer = setInterval(() => {
+                if (Date.now() - session.lastHeartbeat > HEARTBEAT_TIMEOUT) {
+                  ws.close(WsCloseCode.SESSION_TIMEOUT, 'Heartbeat timeout');
+                }
+              }, HEARTBEAT_TIMEOUT);
+
+              return; // Skip full system.ready
+            }
+            // Buffer too old — fall through to full system.ready
+          }
+
           // Build system.ready payload
           const [allChannels, allCategories, allRoles, userReadStates, [srvConfig]] = await Promise.all([
             d.select().from(channels).where(eq(channels.serverId, server.id)),
@@ -143,23 +178,24 @@ export function setupMainWebSocket(): WebSocketServer {
             d.select().from(serverConfig).where(eq(serverConfig.serverId, server.id)).limit(1),
           ]);
 
-          // Get members (max 1000)
-          const memberRows = await d.select().from(members).where(eq(members.serverId, server.id)).limit(1000);
-          const memberUserIds = memberRows.map((m) => m.userId);
-          const profiles = await resolveUserProfiles(d, memberUserIds);
-
-          const allMemberRoles = memberRows.length > 0
-            ? await d.select().from(memberRoles).where(inArray(memberRoles.memberId, memberRows.map((m) => m.id)))
-            : [];
-          const rolesByMember = new Map<string, string[]>();
-          for (const mr of allMemberRoles) {
-            const arr = rolesByMember.get(mr.memberId) ?? [];
-            arr.push(mr.roleId);
-            rolesByMember.set(mr.memberId, arr);
+          // Fetch only the connecting user's own member row
+          const selfMember = await d.select().from(members).where(and(eq(members.serverId, server.id), eq(members.userId, user.id))).limit(1);
+          let formattedSelfMember: ReturnType<typeof formatMember> | null = null;
+          if (selfMember[0]) {
+            const selfProfile = await resolveUserProfiles(d, [user.id]);
+            const selfMemberRoles = await d.select().from(memberRoles).where(eq(memberRoles.memberId, selfMember[0].id));
+            const selfRoleIds = selfMemberRoles.map((mr) => mr.roleId);
+            const profile = selfProfile.get(user.id) ?? { username: 'Unknown', display_name: null, avatar_url: null };
+            formattedSelfMember = formatMember(selfMember[0], profile, selfRoleIds);
           }
 
-          const presences = presenceManager.getAllForMembers(memberUserIds);
           const voiceStates = voiceStateManager.getAllStates();
+
+          // Only send presences for users in voice channels + the connecting user
+          const voiceUserIds = new Set(voiceStates.map((vs) => vs.userId));
+          voiceUserIds.add(user.id);
+          const presenceUserIds = [...voiceUserIds];
+          const presences = presenceManager.getAllForMembers(presenceUserIds);
 
           // Filter channels by READ_MESSAGES permission
           const channelIds = allChannels.map((ch) => ch.id);
@@ -228,10 +264,7 @@ export function setupMainWebSocket(): WebSocketServer {
               }),
               categories: visibleCategories.map(formatCategory),
               roles: allRoles.map(formatRole),
-              members: memberRows.map((m) => {
-                const profile = profiles.get(m.userId) ?? { username: 'Unknown', display_name: null, avatar_url: null };
-                return formatMember(m, profile, rolesByMember.get(m.id) ?? []);
-              }),
+              self_member: formattedSelfMember,
               read_states: userReadStates.map(formatReadState),
               presences: [...presences.entries()].map(([uid, p]) => ({
                 user_id: uid,
@@ -245,17 +278,10 @@ export function setupMainWebSocket(): WebSocketServer {
               initial_messages: initialMessages,
               initial_messages_channel_id: initialChannelId,
               initial_messages_has_more: initialHasMore,
+              resume_seq: getCurrentSeq(serverId),
             },
           };
           ws.send(JSON.stringify(ready));
-
-          // Broadcast online status to all other users on this server
-          eventDispatcher.dispatchToServer(serverId, ServerWsEvents.PRESENCE_UPDATE, {
-            user_id: user.id,
-            status: 'online',
-            custom_text: null,
-            last_active_at: new Date().toISOString(),
-          });
 
           // Start heartbeat check
           heartbeatTimer = setInterval(() => {
@@ -294,7 +320,7 @@ export function setupMainWebSocket(): WebSocketServer {
           for (const entry of buffered) {
             ws.send(JSON.stringify({ event: entry.event, data: entry.data, seq: entry.seq }));
           }
-          ws.send(JSON.stringify({ event: 'system.resumed', data: { replayed: buffered.length } }));
+          ws.send(JSON.stringify({ event: 'system.resumed', data: { replayed: buffered.length, resume_seq: session.serverId ? getCurrentSeq(session.serverId) : 0 } }));
           break;
         }
 
@@ -355,6 +381,7 @@ export function setupMainWebSocket(): WebSocketServer {
         case 'presence.update': {
           const presResult = presenceSchema.safeParse(msg.data);
           if (presResult.success) {
+            if (!rateLimiter.check(`presence:${session.userId}`, 1, 5000)) break;
             const presData = presResult.data;
             presenceManager.update(
               session.userId,

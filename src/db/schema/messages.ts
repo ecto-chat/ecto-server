@@ -28,5 +28,6 @@ export const messages = pgTable(
     index('idx_messages_channel').on(table.channelId, table.id),
     index('idx_messages_pinned').on(table.channelId, table.pinned),
     index('idx_messages_reply').on(table.replyTo),
+    index('idx_messages_channel_author_deleted').on(table.channelId, table.authorId, table.deleted, table.createdAt),
   ],
 );

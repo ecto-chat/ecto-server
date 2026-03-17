@@ -129,29 +129,29 @@ export const messagesRouter = router({
 
       // Link attachment IDs
       if (input.attachment_ids?.length) {
-        for (const attId of input.attachment_ids) {
-          await d.update(attachments).set({ messageId: id }).where(eq(attachments.id, attId));
-        }
+        await d.update(attachments).set({ messageId: id }).where(inArray(attachments.id, input.attachment_ids));
       }
 
       // Collect user IDs that have already been notified (to avoid duplicates)
       const notifiedUsers = new Set<string>();
       const pendingActivities: Array<{ id: string; recipientId: string; type: string }> = [];
 
+      // Collect batch inserts for readStates and activityItems
+      const batchReadStateUserIds: string[] = [];
+      const batchActivityValues: Array<{
+        id: string;
+        userId: string;
+        type: string;
+        actorId: string;
+        messageId: string;
+        channelId: string;
+        contentPreview: string;
+      }> = [];
+
       // Update mention counts for mentioned users
       if (parsed.users.length > 0) {
         for (const mentionedUserId of parsed.users) {
-          await d
-            .insert(readStates)
-            .values({
-              userId: mentionedUserId,
-              channelId: input.channel_id,
-              mentionCount: 1,
-            })
-            .onConflictDoUpdate({
-              target: [readStates.userId, readStates.channelId],
-              set: { mentionCount: sql`${readStates.mentionCount} + 1` },
-            });
+          batchReadStateUserIds.push(mentionedUserId);
           notifiedUsers.add(mentionedUserId);
           // Send real-time notification (skip self-mentions)
           if (mentionedUserId !== ctx.user.id) {
@@ -163,7 +163,7 @@ export const messagesRouter = router({
             });
             sendNotification(mentionedUserId, input.channel_id, 'mention');
             const mentActId = generateUUIDv7();
-            await d.insert(activityItems).values({
+            batchActivityValues.push({
               id: mentActId,
               userId: mentionedUserId,
               type: 'mention',
@@ -187,13 +187,7 @@ export const messagesRouter = router({
         for (const m of allMembers) {
           if (m.userId === ctx.user.id || notifiedUsers.has(m.userId)) continue;
           notifiedUsers.add(m.userId);
-          await d
-            .insert(readStates)
-            .values({ userId: m.userId, channelId: input.channel_id, mentionCount: 1 })
-            .onConflictDoUpdate({
-              target: [readStates.userId, readStates.channelId],
-              set: { mentionCount: sql`${readStates.mentionCount} + 1` },
-            });
+          batchReadStateUserIds.push(m.userId);
           eventDispatcher.dispatchToUser(m.userId, ServerWsEvents.MENTION_CREATE, {
             channel_id: input.channel_id,
             message_id: id,
@@ -202,7 +196,7 @@ export const messagesRouter = router({
           });
           sendNotification(m.userId, input.channel_id, 'mention');
           const evActId = generateUUIDv7();
-          await d.insert(activityItems).values({
+          batchActivityValues.push({
             id: evActId,
             userId: m.userId,
             type: 'mention',
@@ -233,13 +227,7 @@ export const messagesRouter = router({
           for (const m of memberRows) {
             if (m.userId === ctx.user.id || notifiedUsers.has(m.userId)) continue;
             notifiedUsers.add(m.userId);
-            await d
-              .insert(readStates)
-              .values({ userId: m.userId, channelId: input.channel_id, mentionCount: 1 })
-              .onConflictDoUpdate({
-                target: [readStates.userId, readStates.channelId],
-                set: { mentionCount: sql`${readStates.mentionCount} + 1` },
-              });
+            batchReadStateUserIds.push(m.userId);
             eventDispatcher.dispatchToUser(m.userId, ServerWsEvents.MENTION_CREATE, {
               channel_id: input.channel_id,
               message_id: id,
@@ -248,7 +236,7 @@ export const messagesRouter = router({
             });
             sendNotification(m.userId, input.channel_id, 'mention');
             const roleActId = generateUUIDv7();
-            await d.insert(activityItems).values({
+            batchActivityValues.push({
               id: roleActId,
               userId: m.userId,
               type: 'mention',
@@ -260,6 +248,28 @@ export const messagesRouter = router({
             pendingActivities.push({ id: roleActId, recipientId: m.userId, type: 'mention' });
           }
         }
+      }
+
+      // Batch upsert readStates for all mentioned users
+      if (batchReadStateUserIds.length > 0) {
+        await d
+          .insert(readStates)
+          .values(
+            batchReadStateUserIds.map((userId) => ({
+              userId,
+              channelId: input.channel_id,
+              mentionCount: 1,
+            })),
+          )
+          .onConflictDoUpdate({
+            target: [readStates.userId, readStates.channelId],
+            set: { mentionCount: sql`${readStates.mentionCount} + 1` },
+          });
+      }
+
+      // Batch insert all activity items
+      if (batchActivityValues.length > 0) {
+        await d.insert(activityItems).values(batchActivityValues);
       }
 
       // Reply notification

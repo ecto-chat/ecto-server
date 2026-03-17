@@ -66,23 +66,26 @@ export const readStateRouter = router({
       .where(and(inArray(messages.channelId, channelIds), eq(messages.deleted, false)))
       .groupBy(messages.channelId);
 
-    // Batch upsert read states
-    for (const row of latestMessages) {
-      if (!row.messageId) continue;
+    // Batch upsert read states in a single multi-row insert
+    const values = latestMessages
+      .filter((row) => row.messageId)
+      .map((row) => ({
+        userId: ctx.user.id,
+        channelId: row.channelId,
+        lastReadMessageId: row.messageId,
+        mentionCount: 0,
+      }));
+
+    if (values.length > 0) {
       await d
         .insert(readStates)
-        .values({
-          userId: ctx.user.id,
-          channelId: row.channelId,
-          lastReadMessageId: row.messageId,
-          mentionCount: 0,
-        })
+        .values(values)
         .onConflictDoUpdate({
           target: [readStates.userId, readStates.channelId],
           set: {
-            lastReadMessageId: row.messageId,
+            lastReadMessageId: sql`excluded.last_read_message_id`,
             mentionCount: 0,
-            updatedAt: new Date(),
+            updatedAt: sql`now()`,
           },
         });
     }

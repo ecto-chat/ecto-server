@@ -155,6 +155,13 @@
       "when": 1773238585589,
       "tag": "0021_add_custom_domains",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1773758045522,
+      "tag": "0022_fine_shadow_king",
+      "breakpoints": true
     }
   ]
 }

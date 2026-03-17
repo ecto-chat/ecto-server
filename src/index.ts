@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import { generateUUIDv7, Permissions } from 'ecto-shared';
 import { setServerId } from './trpc/context.js';
 import { voiceManager } from './voice/index.js';
+import { startServerRefreshTokenCleanup } from './utils/server-refresh-token.js';
 
 const DEFAULT_CHANNEL_PERMS =
   Permissions.READ_MESSAGES |
@@ -84,7 +85,10 @@ async function main() {
   // 6. Initialize voice (mediasoup workers)
   await voiceManager.initialize();
 
-  // 7. Start HTTP server
+  // 7. Start server refresh token cleanup (hourly)
+  startServerRefreshTokenCleanup(d);
+
+  // 8. Start HTTP server
   const server = await createServer(config);
   server.listen(config.PORT, () => {
     console.log(`Ecto server listening on port ${config.PORT}`);

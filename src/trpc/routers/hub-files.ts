@@ -39,10 +39,14 @@ export const hubFilesRouter = router({
   // ── Shared Tab — Folders ──────────────────────────────────────────
 
   listFolders: protectedProcedure
-    .input(z.object({ parent_id: z.string().uuid().nullable() }))
+    .input(z.object({
+      parent_id: z.string().uuid().nullable(),
+      limit: z.number().int().min(1).max(100).optional(),
+    }))
     .query(async ({ ctx, input }) => {
       await requirePermission(ctx.db, ctx.serverId, ctx.user.id, Permissions.BROWSE_FILES);
       const d = ctx.db;
+      const limit = input.limit ?? 50;
 
       const condition = input.parent_id
         ? and(eq(sharedFolders.serverId, ctx.serverId), eq(sharedFolders.parentId, input.parent_id))
@@ -52,7 +56,8 @@ export const hubFilesRouter = router({
         .select()
         .from(sharedFolders)
         .where(condition)
-        .orderBy(sharedFolders.name);
+        .orderBy(sharedFolders.name)
+        .limit(limit);
 
       // Get file counts and total sizes for each folder
       const folderIds = folders.map((f) => f.id);
@@ -152,7 +157,7 @@ export const hubFilesRouter = router({
       }).returning();
 
       const result = formatSharedFolder(folder!, 0, 0);
-      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FOLDER_CREATE, result);
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SHARED_FOLDER_CREATE, result);
       return result;
     }),
 
@@ -192,7 +197,7 @@ export const hubFilesRouter = router({
         details: { name: input.name, previous_name: folder.name },
       });
 
-      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FOLDER_UPDATE, {
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SHARED_FOLDER_UPDATE, {
         id: input.folder_id,
         name: input.name,
         parent_id: folder.parentId,
@@ -272,7 +277,7 @@ export const hubFilesRouter = router({
         details: { name: folder.name },
       });
 
-      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FOLDER_DELETE, { id: input.folder_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SHARED_FOLDER_DELETE, { id: input.folder_id });
       return { success: true };
     }),
 
@@ -375,7 +380,7 @@ export const hubFilesRouter = router({
         details: { filename: file.filename },
       });
 
-      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_FILE_DELETE, { id: input.file_id, folder_id: file.folderId });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SHARED_FILE_DELETE, { id: input.file_id, folder_id: file.folderId });
       return { success: true };
     }),
 
@@ -525,7 +530,7 @@ export const hubFilesRouter = router({
         });
       }
 
-      eventDispatcher.dispatchToAll(ServerWsEvents.CHANNEL_FILE_DELETE, { id: input.attachment_id });
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.CHANNEL_FILE_DELETE, { id: input.attachment_id });
 
       await insertAuditLog(d, {
         serverId: ctx.serverId,
@@ -751,7 +756,7 @@ export const hubFilesRouter = router({
         details: { overrides_count: toInsert.length },
       });
 
-      eventDispatcher.dispatchToAll(ServerWsEvents.SHARED_ITEM_PERMISSIONS_UPDATE, {
+      eventDispatcher.dispatchToServer(ctx.serverId, ServerWsEvents.SHARED_ITEM_PERMISSIONS_UPDATE, {
         item_type: input.item_type,
         item_id: input.item_id,
       });

@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { WsMessage, ServerDispatchEvent, ServerEventPayload } from 'ecto-shared';
+import { pushEvent } from './event-buffer.js';
 
 export interface WsSession {
   sessionId: string;
@@ -22,6 +23,7 @@ export interface IEventDispatcher {
   dispatchToAll<E extends ServerDispatchEvent['event']>(event: E, data: ServerEventPayload<E>): void;
   dispatchToServer<E extends ServerDispatchEvent['event']>(serverId: string, event: E, data: ServerEventPayload<E>): void;
   dispatchToUser<E extends ServerDispatchEvent['event']>(userId: string, event: E, data: ServerEventPayload<E>): void;
+  dispatchToUsers<E extends ServerDispatchEvent['event']>(userIds: string[], event: E, data: ServerEventPayload<E>): void;
   getEventBuffer(sessionId: string, afterSeq: number): { seq: number; event: string; data: unknown }[];
   disconnectUser(userId: string, closeCode: number, reason: string): void;
   disconnectAll(closeCode: number, reason: string): void;
@@ -114,6 +116,11 @@ export class MemoryEventDispatcher implements IEventDispatcher {
       session.eventBuffer = session.eventBuffer.filter((e) => e.timestamp > cutoff);
     }
 
+    // Also buffer at the server level for cross-session resume
+    if (session.serverId) {
+      pushEvent(session.serverId, event, data);
+    }
+
     if (session.ws.readyState === session.ws.OPEN) {
       session.ws.send(JSON.stringify(msg));
     }
@@ -154,6 +161,12 @@ export class MemoryEventDispatcher implements IEventDispatcher {
       if (session?.authenticated) {
         this.send(session, event, data);
       }
+    }
+  }
+
+  dispatchToUsers<E extends ServerDispatchEvent['event']>(userIds: string[], event: E, data: ServerEventPayload<E>) {
+    for (const userId of userIds) {
+      this.dispatchToUser(userId, event, data);
     }
   }
 

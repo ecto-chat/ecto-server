@@ -12,6 +12,7 @@ export const identifySchema = z.object({
   token: z.string(),
   protocol_version: z.number().optional(),
   active_channel_id: z.string().uuid().optional(),
+  resume_seq: z.number().int().optional(),
 });
 
 /** system.resume payload */

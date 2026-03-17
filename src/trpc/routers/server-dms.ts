@@ -67,27 +67,39 @@ function formatServerDmMessage(
 }
 
 export const serverDmsRouter = router({
-  list: protectedProcedure.query(async ({ ctx }) => {
-    await requireMember(ctx.db, ctx.serverId, ctx.user.id);
-    await requireDmEnabled(ctx.db, ctx.serverId);
-    const d = ctx.db;
+  list: protectedProcedure
+    .input(
+      z.object({
+        limit: z.number().int().min(1).max(100).optional(),
+      }).optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      await requireMember(ctx.db, ctx.serverId, ctx.user.id);
+      await requireDmEnabled(ctx.db, ctx.serverId);
+      const d = ctx.db;
 
-    // Find all conversations where this user is a participant
-    const convos = await d
-      .select()
-      .from(dmConversations)
-      .where(
-        and(
-          eq(dmConversations.serverId, ctx.serverId),
-          or(
-            eq(dmConversations.userA, ctx.user.id),
-            eq(dmConversations.userB, ctx.user.id),
+      const limit = input?.limit ?? 50;
+
+      // Find all conversations where this user is a participant
+      const allConvos = await d
+        .select()
+        .from(dmConversations)
+        .where(
+          and(
+            eq(dmConversations.serverId, ctx.serverId),
+            or(
+              eq(dmConversations.userA, ctx.user.id),
+              eq(dmConversations.userB, ctx.user.id),
+            ),
           ),
-        ),
-      )
-      .orderBy(desc(dmConversations.lastMessageAt));
+        )
+        .orderBy(desc(dmConversations.lastMessageAt))
+        .limit(limit + 1);
 
-    if (convos.length === 0) return [];
+      const has_more = allConvos.length > limit;
+      const convos = has_more ? allConvos.slice(0, limit) : allConvos;
+
+      if (convos.length === 0) return { conversations: [], has_more: false };
 
     // Collect peer IDs
     const peerIds = convos.map((c) =>
@@ -146,22 +158,34 @@ export const serverDmsRouter = router({
     const readStateMap = new Map(readStateRows.map((r) => [r.conversationId, r.lastReadMessageId]));
 
     // Count unread messages per conversation (messages after lastReadMessageId)
+    // Build a single GROUP BY query, post-filter by per-conversation last_read_id
     const unreadCountMap = new Map<string, number>();
-    for (const convoId of convoIds) {
-      const lastReadId = readStateMap.get(convoId);
-      const conditions = [
-        eq(messages.channelId, convoId),
-        eq(messages.deleted, false),
-        ne(messages.authorId, ctx.user.id),
-      ];
-      if (lastReadId) {
-        conditions.push(gt(messages.id, lastReadId));
-      }
-      const [result] = await d
-        .select({ value: countFn() })
+    if (convoIds.length > 0) {
+      // Build a CASE expression that filters by the per-conversation last_read_id
+      const lastReadCases = convoIds.map((cid) => {
+        const lastReadId = readStateMap.get(cid);
+        if (lastReadId) {
+          return sql`WHEN ${messages.channelId} = ${cid} AND ${messages.id} > ${lastReadId} THEN 1`;
+        }
+        return sql`WHEN ${messages.channelId} = ${cid} THEN 1`;
+      });
+
+      const unreadRows = await d
+        .select({
+          channelId: messages.channelId,
+          count: sql<number>`count(CASE ${sql.join(lastReadCases, sql` `)} ELSE NULL END)::int`,
+        })
         .from(messages)
-        .where(and(...conditions));
-      unreadCountMap.set(convoId, Number(result?.value ?? 0));
+        .where(and(
+          inArray(messages.channelId, convoIds),
+          eq(messages.deleted, false),
+          ne(messages.authorId, ctx.user.id),
+        ))
+        .groupBy(messages.channelId);
+
+      for (const row of unreadRows) {
+        unreadCountMap.set(row.channelId, row.count);
+      }
     }
 
     const resultList: ServerDmConversation[] = convos.map((c) => {
@@ -190,7 +214,7 @@ export const serverDmsRouter = router({
       };
     });
 
-    return resultList;
+    return { conversations: resultList, has_more };
   }),
 
   history: protectedProcedure

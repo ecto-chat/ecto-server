@@ -26,6 +26,8 @@ import { ectoError } from '../../utils/errors.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
 import { cleanupVoiceState } from '../../utils/voice-cleanup.js';
 import { signServerToken } from '../../utils/jwt.js';
+import { createServerRefreshToken, verifyServerRefreshToken, hashToken } from '../../utils/server-refresh-token.js';
+import { serverRefreshTokens } from '../../db/schema/index.js';
 import { registerLocal, loginLocal } from './local-auth.js';
 import { cleanupMemberData } from './members.js';
 import { resolveUserProfile, resolveUserProfiles } from '../../utils/resolve-profile.js';
@@ -176,6 +178,7 @@ export const serverRouter = router({
 
         if (existingMember) {
           const serverToken = await signServerToken({ sub: userId, identity_type: identityType, tv: existingMember.tokenVersion, serverId: ctx.serverId });
+          const serverRefreshToken = await createServerRefreshToken(tx as unknown as import('../../db/index.js').Db, existingMember.id, userId, existingMember.tokenVersion, ctx.serverId);
           const profile = await resolveUserProfile(tx, userId, identityType);
           const memberRoleRows = await tx
             .select({ roleId: memberRoles.roleId })
@@ -187,6 +190,7 @@ export const serverRouter = router({
 
           return {
             server_token: serverToken,
+            server_refresh_token: serverRefreshToken,
             server: formatServer(serverRow!),
             member: formatMember(memberRow!, profile, roleIds),
             isNew: false as const,
@@ -256,6 +260,7 @@ export const serverRouter = router({
 
         // Sign server token
         const serverToken = await signServerToken({ sub: userId, identity_type: identityType, tv: 0, serverId: ctx.serverId });
+        const serverRefreshToken = await createServerRefreshToken(tx as unknown as import('../../db/index.js').Db, memberId, userId, 0, ctx.serverId);
 
         // Get member data
         const [memberRow] = await tx.select().from(members).where(eq(members.id, memberId)).limit(1);
@@ -265,6 +270,7 @@ export const serverRouter = router({
 
         return {
           server_token: serverToken,
+          server_refresh_token: serverRefreshToken,
           server: formatServer(serverRow!),
           member: formatMember(memberRow!, profile, roleIds),
           isNew: true as const,
@@ -307,6 +313,7 @@ export const serverRouter = router({
 
       return {
         server_token: result.server_token,
+        server_refresh_token: result.server_refresh_token,
         server: result.server,
         member: result.member,
       };
@@ -421,25 +428,55 @@ export const serverRouter = router({
       return { success: true };
     }),
 
-  refreshToken: protectedProcedure.mutation(async ({ ctx }) => {
-    const d = ctx.db;
-    const member = await requireMember(d, ctx.serverId, ctx.user.id);
+  refreshToken: publicProcedure
+    .input(z.object({ server_refresh_token: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const d = ctx.db;
 
-    const [server] = await d
-      .select({ id: servers.id })
-      .from(servers)
-      .where(eq(servers.id, ctx.serverId))
-      .limit(1);
+      // 1. Verify refresh token JWT (signature + expiry + audience)
+      let payload: import('../../utils/server-refresh-token.js').ServerRefreshTokenPayload;
+      try {
+        payload = await verifyServerRefreshToken(input.server_refresh_token);
+      } catch {
+        throw ectoError('UNAUTHORIZED', 1000, 'Invalid or expired refresh token');
+      }
 
-    const serverToken = await signServerToken({
-      sub: ctx.user.id,
-      identity_type: ctx.user.identity_type,
-      tv: member.tokenVersion,
-      serverId: server?.id,
-    });
+      // 2. Look up token hash in DB
+      const oldHash = hashToken(input.server_refresh_token);
+      const [existing] = await d
+        .select({ id: serverRefreshTokens.id })
+        .from(serverRefreshTokens)
+        .where(eq(serverRefreshTokens.tokenHash, oldHash))
+        .limit(1);
 
-    return { server_token: serverToken };
-  }),
+      if (!existing) {
+        throw ectoError('UNAUTHORIZED', 1000, 'Refresh token not found');
+      }
+
+      // 3. Verify membership still exists
+      const member = await requireMember(d, ctx.serverId, payload.sub);
+
+      // 4. Check tokenVersion (revocation check)
+      if (member.tokenVersion !== payload.tv) {
+        // Token version mismatch — delete the old token and reject
+        await d.delete(serverRefreshTokens).where(eq(serverRefreshTokens.id, existing.id));
+        throw ectoError('UNAUTHORIZED', 1000, 'Token has been revoked');
+      }
+
+      // 5. Sign new access token
+      const serverToken = await signServerToken({
+        sub: payload.sub,
+        identity_type: member.identityType as 'global' | 'local',
+        tv: member.tokenVersion,
+        serverId: ctx.serverId,
+      });
+
+      // 6. Rotate: delete old refresh token, create new one
+      await d.delete(serverRefreshTokens).where(eq(serverRefreshTokens.id, existing.id));
+      const newRefreshToken = await createServerRefreshToken(d, member.id, payload.sub, member.tokenVersion, ctx.serverId);
+
+      return { server_token: serverToken, server_refresh_token: newRefreshToken };
+    }),
 
   uploadIcon: protectedProcedure
     .input(z.object({ icon_url: z.string() }))

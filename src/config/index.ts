@@ -26,6 +26,8 @@ const envSchema = z.object({
   TLS_KEY_PATH: z.string().optional(),
   // Plain HTTP port for internal/private-network traffic when TLS is enabled
   INTERNAL_HTTP_PORT: z.coerce.number().optional(),
+  // Database connection pool size
+  DB_POOL_MAX: z.coerce.number().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;

@@ -2,6 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import compression from 'compression';
 import { createHTTPHandler } from '@trpc/server/adapters/standalone';
 import { eq } from 'drizzle-orm';
 import { config } from '../config/index.js';
@@ -35,7 +36,12 @@ export async function createServer(_config: Config) {
     },
   });
 
+  const compress = compression();
+
   const requestHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+    // Apply gzip/deflate compression
+    await new Promise<void>((resolve) => compress(req as any, res as any, (() => resolve()) as any));
+
     // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, HEAD, OPTIONS');

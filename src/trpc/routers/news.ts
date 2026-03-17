@@ -1,12 +1,12 @@
 import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { newsPosts, newsComments, channels, members, servers, serverConfig } from '../../db/schema/index.js';
-import { eq, and, lt, gt, desc, asc, sql } from 'drizzle-orm';
+import { eq, and, lt, gt, desc, asc, sql, inArray } from 'drizzle-orm';
 import { generateUUIDv7, Permissions, EctoErrorCode, ServerWsEvents } from 'ecto-shared';
 import { requirePermission } from '../../utils/permission-context.js';
 import { formatMessageAuthor } from '../../utils/format.js';
 import { ectoError } from '../../utils/errors.js';
-import { resolveUserProfile } from '../../utils/resolve-profile.js';
+import { resolveUserProfile, resolveUserProfiles } from '../../utils/resolve-profile.js';
 import { eventDispatcher } from '../../ws/event-dispatcher.js';
 import { syncNewsPostToCentral, deleteNewsPostFromCentral } from '../../services/central-news-sync.js';
 import type { Db } from '../../db/index.js';
@@ -48,11 +48,33 @@ export const newsRouter = router({
       const hasMore = rows.length > limit;
       const items = hasMore ? rows.slice(0, limit) : rows;
 
-      // Resolve authors
+      // Resolve authors in batch
       const authorIds = [...new Set(items.map((r) => r.authorId))];
+      const [profileMap, memberRows] = await Promise.all([
+        resolveUserProfiles(ctx.db, authorIds),
+        authorIds.length > 0
+          ? ctx.db
+              .select({ userId: members.userId, nickname: members.nickname, identityType: members.identityType })
+              .from(members)
+              .where(and(eq(members.serverId, ctx.serverId), inArray(members.userId, authorIds)))
+          : Promise.resolve([]),
+      ]);
+      const memberMap = new Map(memberRows.map((m) => [m.userId, m]));
+
+      // For authors with local identity, resolve their profile individually (rare case)
       const authors = new Map<string, Awaited<ReturnType<typeof getAuthorInfo>>>();
       for (const authorId of authorIds) {
-        authors.set(authorId, await getAuthorInfo(ctx.db, ctx.serverId, authorId));
+        const mem = memberMap.get(authorId);
+        const identityType = (mem?.identityType as 'global' | 'local') ?? 'global';
+        if (identityType === 'local') {
+          // Local users won't be in the batch profileMap (which queries cachedProfiles/localUsers)
+          // resolveUserProfiles already checks both tables, so use the batch result
+          const profile = profileMap.get(authorId) ?? { username: 'Unknown', display_name: null, avatar_url: null };
+          authors.set(authorId, formatMessageAuthor(profile, authorId, mem?.nickname ?? null));
+        } else {
+          const profile = profileMap.get(authorId) ?? { username: 'Unknown', display_name: null, avatar_url: null };
+          authors.set(authorId, formatMessageAuthor(profile, authorId, mem?.nickname ?? null));
+        }
       }
 
       return {
@@ -394,11 +416,24 @@ export const newsRouter = router({
       const hasMore = rows.length > limit;
       const items = hasMore ? rows.slice(0, limit) : rows;
 
-      // Resolve authors
+      // Resolve authors in batch
       const authorIds = [...new Set(items.map((r) => r.authorId))];
+      const [profileMap, memberRows] = await Promise.all([
+        resolveUserProfiles(ctx.db, authorIds),
+        authorIds.length > 0
+          ? ctx.db
+              .select({ userId: members.userId, nickname: members.nickname, identityType: members.identityType })
+              .from(members)
+              .where(and(eq(members.serverId, ctx.serverId), inArray(members.userId, authorIds)))
+          : Promise.resolve([]),
+      ]);
+      const memberMap = new Map(memberRows.map((m) => [m.userId, m]));
+
       const authors = new Map<string, Awaited<ReturnType<typeof getAuthorInfo>>>();
       for (const authorId of authorIds) {
-        authors.set(authorId, await getAuthorInfo(ctx.db, ctx.serverId, authorId));
+        const mem = memberMap.get(authorId);
+        const profile = profileMap.get(authorId) ?? { username: 'Unknown', display_name: null, avatar_url: null };
+        authors.set(authorId, formatMessageAuthor(profile, authorId, mem?.nickname ?? null));
       }
 
       return {

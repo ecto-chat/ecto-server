@@ -1,7 +1,7 @@
 import { z } from 'zod/v4';
 import { router, protectedProcedure } from '../init.js';
 import { invites } from '../../db/schema/index.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt, desc } from 'drizzle-orm';
 import { generateUUIDv7, Permissions, ServerWsEvents } from 'ecto-shared';
 import { requirePermission, requireMember } from '../../utils/permission-context.js';
 import { insertAuditLog } from '../../utils/audit-log.js';
@@ -69,18 +69,43 @@ export const invitesRouter = router({
       return { invite, url };
     }),
 
-  list: protectedProcedure.query(async ({ ctx }) => {
-    await requireMember(ctx.db, ctx.serverId, ctx.user.id);
+  list: protectedProcedure
+    .input(
+      z.object({
+        limit: z.number().int().min(1).max(100).optional(),
+        after: z.string().uuid().optional(),
+      }).optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      await requireMember(ctx.db, ctx.serverId, ctx.user.id);
 
-    const rows = await ctx.db.select().from(invites).where(eq(invites.serverId, ctx.serverId));
-    const creatorIds = [...new Set(rows.map((r) => r.createdBy))];
-    const profiles = await resolveUserProfiles(ctx.db, creatorIds);
+      const limit = input?.limit ?? 50;
+      const conditions = [eq(invites.serverId, ctx.serverId)];
+      if (input?.after) {
+        conditions.push(gt(invites.id, input.after));
+      }
 
-    return rows.map((r) => {
-      const profile = profiles.get(r.createdBy);
-      return formatInvite(r, profile?.username ?? 'Unknown');
-    });
-  }),
+      const rows = await ctx.db
+        .select()
+        .from(invites)
+        .where(and(...conditions))
+        .orderBy(desc(invites.createdAt))
+        .limit(limit + 1);
+
+      const has_more = rows.length > limit;
+      const items = has_more ? rows.slice(0, limit) : rows;
+
+      const creatorIds = [...new Set(items.map((r) => r.createdBy))];
+      const profiles = await resolveUserProfiles(ctx.db, creatorIds);
+
+      return {
+        invites: items.map((r) => {
+          const profile = profiles.get(r.createdBy);
+          return formatInvite(r, profile?.username ?? 'Unknown');
+        }),
+        has_more,
+      };
+    }),
 
   revoke: protectedProcedure
     .input(z.object({ invite_id: z.string().uuid() }))
